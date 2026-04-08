@@ -7,7 +7,7 @@ use std::time::Instant;
 use iced::widget::{
     Space, button, column, container, markdown, mouse_area, row, rule, stack, text, text_editor,
 };
-use iced::{Border, Color, Element, Fill, Length, Subscription, Task, Theme};
+use iced::{Border, Color, Element, Fill, Length, Padding, Point, Subscription, Task, Theme};
 
 use crate::db::DbPool;
 use crate::message::{ContextMenuTarget, Message};
@@ -87,6 +87,10 @@ pub struct App {
     pub(crate) last_note_click: Option<(String, Instant)>,
     pub(crate) dark_theme: bool,
     pub(crate) editor_font_size: u16,
+    /// 实时跟踪的鼠标位置（窗口坐标），用于右键菜单定位
+    pub(crate) cursor_position: Point,
+    /// 右键菜单打开时锁定的位置快照（None 表示未打开）
+    pub(crate) context_menu_position: Option<Point>,
 }
 
 impl App {
@@ -107,6 +111,8 @@ impl App {
             last_note_click: None,
             dark_theme: true,
             editor_font_size: 14,
+            cursor_position: Point::ORIGIN,
+            context_menu_position: None,
         };
 
         let task = Task::perform(
@@ -167,7 +173,13 @@ impl App {
 
         content = content.push(row![sidebar, rule::vertical(1), editor_area].height(Fill));
 
-        let main_view: Element<'_, Message> = container(content).width(Fill).height(Fill).into();
+        // 用 mouse_area 包裹主视图以持续跟踪鼠标位置，供右键菜单弹出定位使用。
+        // on_move 只观察事件而不捕获，不会影响子组件的交互。
+        let main_view: Element<'_, Message> = mouse_area(
+            container(content).width(Fill).height(Fill),
+        )
+        .on_move(Message::CursorMoved)
+        .into();
 
         // 上下文菜单覆盖层
         if let Some(ctx) = &self.context_menu {
@@ -246,7 +258,17 @@ impl App {
             let dismiss = mouse_area(Space::new().width(Fill).height(Fill))
                 .on_press(Message::HideContextMenu);
 
-            stack![main_view, dismiss, container(menu).padding([80, 60])]
+            // 菜单位置：使用打开时的鼠标位置快照，避免用户移动鼠标时菜单跟随漂移。
+            // 通过在外层 container 上设置 top/left padding 来把菜单定位到鼠标点击处。
+            let pos = self.context_menu_position.unwrap_or(self.cursor_position);
+            let menu_pad = Padding {
+                top: pos.y.max(0.0),
+                left: pos.x.max(0.0),
+                right: 0.0,
+                bottom: 0.0,
+            };
+
+            stack![main_view, dismiss, container(menu).padding(menu_pad)]
                 .width(Fill)
                 .height(Fill)
                 .into()

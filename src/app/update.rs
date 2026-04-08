@@ -282,6 +282,8 @@ impl App {
             }
 
             Message::ToggleFolder(id) => {
+                // 点击文件夹同时选中，便于「+ 笔记」在该文件夹下创建
+                self.selected_id = Some(id.clone());
                 let db = self.db.clone();
                 tree_ops::toggle_in_tree(&mut self.tree, &id, &db).unwrap_or(Task::none())
             }
@@ -803,12 +805,20 @@ impl App {
 
             // 上下文菜单
             Message::ShowContextMenu(target) => {
+                // 打开时快照当前鼠标位置，避免后续鼠标移动让菜单漂移
+                self.context_menu_position = Some(self.cursor_position);
                 self.context_menu = Some(target);
                 Task::none()
             }
 
             Message::HideContextMenu => {
                 self.context_menu = None;
+                self.context_menu_position = None;
+                Task::none()
+            }
+
+            Message::CursorMoved(point) => {
+                self.cursor_position = point;
                 Task::none()
             }
 

@@ -58,7 +58,10 @@ pub fn set_children(tree: &mut [TreeNode], folder_id: &str, new_children: Vec<Tr
     }
 }
 
-/// 查找选中节点所在的文件夹 ID
+/// 查找给定 id 所属的文件夹 id：
+/// - 若 id 本身是文件夹，返回该文件夹自身的 id
+/// - 若 id 是某笔记节点，返回包含该笔记的父文件夹 id
+/// - 否则递归进入子文件夹继续查找
 pub fn find_folder_in_tree(tree: &[TreeNode], id: &str) -> Option<String> {
     for node in tree {
         if let TreeNode::Folder {
@@ -68,13 +71,17 @@ pub fn find_folder_in_tree(tree: &[TreeNode], id: &str) -> Option<String> {
             if folder.id == id {
                 return Some(folder.id.clone());
             }
-            for child in children {
-                if child.id() == id {
-                    return Some(folder.id.clone());
-                }
-            }
+            // 递归进入子文件夹（优先匹配嵌套文件夹自身）
             if let Some(found) = find_folder_in_tree(children, id) {
                 return Some(found);
+            }
+            // 再检查是否为当前文件夹直接包含的笔记
+            for child in children {
+                if let TreeNode::Note { meta } = child
+                    && meta.id == id
+                {
+                    return Some(folder.id.clone());
+                }
             }
         }
     }

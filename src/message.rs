@@ -97,6 +97,9 @@ pub enum Message {
     ShowContextMenu(ContextMenuTarget),
     HideContextMenu,
 
+    // 鼠标位置（用于右键菜单定位）
+    CursorMoved(iced::Point),
+
     // 重命名
     StartRename(String, bool, String),
     RenameInputChanged(String),
