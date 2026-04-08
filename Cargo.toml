@@ -1,0 +1,22 @@
+[package]
+name = "notepad"
+version = "0.1.0"
+edition = "2024"
+description = "高性能 Markdown 记事本"
+
+[dependencies]
+iced = { version = "0.14", features = ["tokio", "markdown", "highlighter", "image"] }
+iced_core = "0.14"
+rusqlite = { version = "0.34", features = ["bundled"] }
+rusqlite_migration = "2"
+tokio = { version = "1", features = ["sync"] }
+rfd = "0.15"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

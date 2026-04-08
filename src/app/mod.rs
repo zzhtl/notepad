@@ -1,0 +1,360 @@
+mod tree_ops;
+pub mod update;
+
+use std::collections::HashMap;
+use std::time::Instant;
+
+use iced::widget::{
+    Space, button, column, container, markdown, mouse_area, row, rule, stack, text, text_editor,
+};
+use iced::{Border, Color, Element, Fill, Length, Subscription, Task, Theme};
+
+use crate::db::DbPool;
+use crate::message::{ContextMenuTarget, Message};
+use crate::model::folder::TreeNode;
+use crate::model::note::Note;
+use crate::ui;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewSyncMode {
+    Once,
+    FollowCursor,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PreviewSyncTarget {
+    pub line: usize,
+    pub mode: PreviewSyncMode,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingNoteJump {
+    pub note_id: String,
+    pub line: usize,
+    pub column: usize,
+    pub match_len: usize,
+}
+
+/// 当前活跃笔记状态
+pub struct ActiveNote {
+    pub note: Note,
+    pub content: text_editor::Content,
+    pub markdown_items: Vec<markdown::Item>,
+    pub images: HashMap<String, iced::widget::image::Handle>,
+    pub dirty: bool,
+    pub last_edit: Instant,
+    pub preview_content_height: f32,
+    pub preview_viewport_height: f32,
+    pub preview_target: Option<PreviewSyncTarget>,
+    pub editing: bool,
+    pub undo_stack: Vec<String>,
+    pub redo_stack: Vec<String>,
+    pub last_undo_push: Instant,
+    /// 搜索高亮查询词（查看模式下高亮文档中的匹配内容）
+    pub highlight_query: Option<String>,
+    /// 搜索导航目标行（查看模式滚动定位）
+    pub highlight_line: Option<usize>,
+}
+
+/// 重命名状态
+pub(crate) struct RenameState {
+    pub node_id: String,
+    pub is_folder: bool,
+    pub input: String,
+}
+
+/// 待创建状态（内联命名）
+pub struct PendingCreate {
+    pub parent_id: Option<String>,
+    pub is_folder: bool,
+    pub input: String,
+}
+
+/// 应用主结构体
+pub struct App {
+    pub(crate) db: DbPool,
+    pub(crate) tree: Vec<TreeNode>,
+    pub(crate) selected_id: Option<String>,
+    pub(crate) active_note: Option<ActiveNote>,
+    pub(crate) context_menu: Option<ContextMenuTarget>,
+    pub(crate) rename_state: Option<RenameState>,
+    pub(crate) error: Option<String>,
+    pub(crate) search_query: String,
+    pub(crate) search_results: Vec<crate::model::note::SearchResult>,
+    pub(crate) search_active: bool,
+    pub(crate) pending_note_jump: Option<PendingNoteJump>,
+    pub(crate) pending_create: Option<PendingCreate>,
+    pub(crate) last_note_click: Option<(String, Instant)>,
+    pub(crate) dark_theme: bool,
+    pub(crate) editor_font_size: u16,
+}
+
+impl App {
+    pub fn new(db: DbPool) -> (Self, Task<Message>) {
+        let app = Self {
+            db: db.clone(),
+            tree: Vec::new(),
+            selected_id: None,
+            active_note: None,
+            context_menu: None,
+            rename_state: None,
+            error: None,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_active: false,
+            pending_note_jump: None,
+            pending_create: None,
+            last_note_click: None,
+            dark_theme: true,
+            editor_font_size: 14,
+        };
+
+        let task = Task::perform(
+            async move { db.execute(crate::db::folder::load_root_tree).await },
+            |result| match result {
+                Ok(tree) => Message::TreeLoaded(tree),
+                Err(e) => Message::DbError(e.to_string()),
+            },
+        );
+
+        (app, task)
+    }
+
+    pub fn view(&self) -> Element<'_, Message> {
+        let sidebar = ui::sidebar::view(
+            &self.tree,
+            self.selected_id.as_deref(),
+            self.rename_state
+                .as_ref()
+                .map(|s| (s.node_id.as_str(), s.input.as_str())),
+            &self.search_query,
+            self.search_active,
+            &self.search_results,
+            self.pending_create.as_ref(),
+        );
+
+        let editor_area: Element<'_, Message> = if let Some(active) = &self.active_note {
+            let toolbar = ui::toolbar::view(
+                &active.note.title,
+                active.dirty,
+                active.editing,
+                self.dark_theme,
+                self.editor_font_size,
+            );
+            let editor = ui::editor::view(active, &self.theme(), self.editor_font_size);
+
+            {
+                let status_bar = ui::status_bar::view(active);
+                column![
+                    toolbar,
+                    rule::horizontal(1),
+                    editor,
+                    rule::horizontal(1),
+                    status_bar,
+                ]
+                .height(Fill)
+                .into()
+            }
+        } else {
+            ui::welcome::view(self.dark_theme).into()
+        };
+
+        let mut content = column![].width(Fill).height(Fill);
+
+        if let Some(err) = &self.error {
+            content = content.push(ui::error_banner::view(err));
+        }
+
+        content = content.push(row![sidebar, rule::vertical(1), editor_area].height(Fill));
+
+        let main_view: Element<'_, Message> = container(content).width(Fill).height(Fill).into();
+
+        // 上下文菜单覆盖层
+        if let Some(ctx) = &self.context_menu {
+            let node_name = self.find_node_name(&ctx.node_id).unwrap_or_default();
+            let mut menu_items: Vec<Element<'_, Message>> = Vec::new();
+
+            if ctx.is_folder {
+                menu_items.push(
+                    button(text("新建子文件夹").size(13))
+                        .on_press(Message::StartCreateSubFolder(ctx.node_id.clone()))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                );
+                menu_items.push(
+                    button(text("新建笔记").size(13))
+                        .on_press(Message::StartCreateNoteInFolder(ctx.node_id.clone()))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                );
+            } else {
+                // 笔记的右键菜单：编辑
+                menu_items.push(
+                    button(text("编辑").size(13))
+                        .on_press(Message::EditNote(ctx.node_id.clone()))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                );
+            }
+
+            menu_items.push(
+                button(text("重命名").size(13))
+                    .on_press(Message::StartRename(
+                        ctx.node_id.clone(),
+                        ctx.is_folder,
+                        node_name,
+                    ))
+                    .padding([4, 12])
+                    .width(Length::Fill)
+                    .style(button::text)
+                    .into(),
+            );
+            menu_items.push(
+                button(text("删除").size(13))
+                    .on_press(Message::DeleteNode(ctx.node_id.clone(), ctx.is_folder))
+                    .padding([4, 12])
+                    .width(Length::Fill)
+                    .style(button::danger)
+                    .into(),
+            );
+
+            let menu_style = |theme: &Theme| -> container::Style {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(palette.background.weak.color.into()),
+                    border: Border {
+                        radius: 8.0.into(),
+                        width: 1.0,
+                        color: Color {
+                            a: 0.35,
+                            ..palette.primary.base.color
+                        },
+                    },
+                    ..container::Style::default()
+                }
+            };
+            let menu = container(column(menu_items).spacing(1).width(Length::Fixed(180.0)))
+                .padding(6)
+                .style(menu_style);
+
+            let dismiss = mouse_area(Space::new().width(Fill).height(Fill))
+                .on_press(Message::HideContextMenu);
+
+            stack![main_view, dismiss, container(menu).padding([80, 60])]
+                .width(Fill)
+                .height(Fill)
+                .into()
+        } else {
+            main_view
+        }
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        let auto_save = if self.active_note.as_ref().is_some_and(|n| n.dirty) {
+            iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::SaveTick)
+        } else {
+            Subscription::none()
+        };
+
+        let keyboard = iced::keyboard::listen().map(|event| match event {
+            iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                Message::KeyPressed(key, modifiers)
+            }
+            _ => Message::KeyPressed(
+                iced::keyboard::Key::Unidentified,
+                iced::keyboard::Modifiers::default(),
+            ),
+        });
+
+        Subscription::batch([auto_save, keyboard])
+    }
+
+    pub fn title(&self) -> String {
+        if let Some(active) = &self.active_note {
+            let dirty_mark = if active.dirty { " *" } else { "" };
+            format!("{}{} - Notepad", active.note.title, dirty_mark)
+        } else {
+            "Notepad".to_string()
+        }
+    }
+
+    pub fn theme(&self) -> Theme {
+        if self.dark_theme {
+            Theme::TokyoNight
+        } else {
+            Theme::Light
+        }
+    }
+
+    // --- 内部辅助 ---
+
+    pub(crate) fn create_note_in_folder_with_name(
+        &self,
+        folder_id: String,
+        name: String,
+    ) -> Task<Message> {
+        let db = self.db.clone();
+        Task::perform(
+            async move {
+                db.execute(move |conn| crate::db::note::create_note(conn, &folder_id, &name))
+                    .await
+            },
+            |result| match result {
+                Ok(note) => Message::NoteCreated(TreeNode::Note {
+                    meta: crate::model::folder::NoteMeta {
+                        id: note.id,
+                        folder_id: note.folder_id,
+                        title: note.title,
+                        sort_order: note.sort_order,
+                    },
+                }),
+                Err(e) => Message::DbError(e.to_string()),
+            },
+        )
+    }
+
+    pub(crate) fn find_selected_folder_id(&self) -> Option<String> {
+        if let Some(id) = &self.selected_id {
+            tree_ops::find_folder_in_tree(&self.tree, id)
+        } else {
+            self.tree.first().map(|n| n.id().to_string())
+        }
+    }
+
+    pub(crate) fn find_node_name(&self, id: &str) -> Option<String> {
+        tree_ops::find_name_in_tree(&self.tree, id)
+    }
+
+    pub(crate) fn save_if_dirty(&self) -> Task<Message> {
+        if self.active_note.as_ref().is_some_and(|n| n.dirty) {
+            self.save_current_note()
+        } else {
+            Task::none()
+        }
+    }
+
+    pub(crate) fn save_current_note(&self) -> Task<Message> {
+        if let Some(active) = &self.active_note {
+            let db = self.db.clone();
+            let note = active.note.clone();
+            Task::perform(
+                async move {
+                    db.execute(move |conn| crate::db::note::save_note(conn, &note))
+                        .await
+                },
+                |result| match result {
+                    Ok(()) => Message::NoteSaved,
+                    Err(e) => Message::DbError(e.to_string()),
+                },
+            )
+        } else {
+            Task::none()
+        }
+    }
+}
