@@ -1,6 +1,6 @@
 use crate::db::DbPool;
 use crate::message::Message;
-use crate::model::folder::TreeNode;
+use crate::model::folder::{NoteMeta, TreeNode};
 
 /// 递归切换文件夹展开状态
 pub fn toggle_in_tree(tree: &mut [TreeNode], id: &str, db: &DbPool) -> Option<iced::Task<Message>> {
@@ -168,5 +168,114 @@ pub fn ensure_expanded(tree: &mut [TreeNode], folder_id: &str) {
             }
             ensure_expanded(children, folder_id);
         }
+    }
+}
+
+/// 若目标文件夹当前已加载到树中，则同步更新树内的笔记位置；
+/// 否则仅从旧位置移除，后续在展开目标文件夹时从数据库重新加载。
+pub fn move_note(tree: &mut Vec<TreeNode>, meta: NoteMeta) {
+    let target_folder_id = meta.folder_id.clone();
+    remove_from_tree(tree, &meta.id);
+
+    if is_folder_loaded(tree, &target_folder_id) {
+        add_node(tree, &target_folder_id, TreeNode::Note { meta });
+    }
+}
+
+fn is_folder_loaded(tree: &[TreeNode], folder_id: &str) -> bool {
+    for node in tree {
+        if let TreeNode::Folder {
+            folder,
+            children,
+            loaded,
+            ..
+        } = node
+        {
+            if folder.id == folder_id {
+                return *loaded;
+            }
+
+            if is_folder_loaded(children, folder_id) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::folder::{Folder, NoteMeta, TreeNode};
+
+    fn folder(id: &str, loaded: bool, children: Vec<TreeNode>) -> TreeNode {
+        TreeNode::Folder {
+            folder: Folder {
+                id: id.to_string(),
+                parent_id: None,
+                name: id.to_string(),
+                sort_order: 0,
+                created_at: String::new(),
+                updated_at: String::new(),
+            },
+            expanded: false,
+            children,
+            loaded,
+        }
+    }
+
+    fn note(id: &str, folder_id: &str, title: &str) -> TreeNode {
+        TreeNode::Note {
+            meta: NoteMeta {
+                id: id.to_string(),
+                folder_id: folder_id.to_string(),
+                title: title.to_string(),
+                sort_order: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn move_note_reinserts_into_loaded_target_folder() {
+        let mut tree = vec![
+            folder("source", true, vec![note("n1", "source", "note")]),
+            folder("target", true, Vec::new()),
+        ];
+
+        super::move_note(
+            &mut tree,
+            NoteMeta {
+                id: "n1".to_string(),
+                folder_id: "target".to_string(),
+                title: "note".to_string(),
+                sort_order: 1,
+            },
+        );
+
+        assert!(super::find_name_in_tree(&tree, "n1").is_some());
+        assert_eq!(
+            super::find_folder_in_tree(&tree, "n1").as_deref(),
+            Some("target")
+        );
+    }
+
+    #[test]
+    fn move_note_only_removes_when_target_folder_is_unloaded() {
+        let mut tree = vec![
+            folder("source", true, vec![note("n1", "source", "note")]),
+            folder("target", false, Vec::new()),
+        ];
+
+        super::move_note(
+            &mut tree,
+            NoteMeta {
+                id: "n1".to_string(),
+                folder_id: "target".to_string(),
+                title: "note".to_string(),
+                sort_order: 1,
+            },
+        );
+
+        assert!(super::find_name_in_tree(&tree, "n1").is_none());
     }
 }

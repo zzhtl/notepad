@@ -1,4 +1,4 @@
-use crate::model::folder::TreeNode;
+use crate::model::folder::{Folder, NoteMeta, TreeNode};
 use crate::model::image::ImageAttachment;
 use crate::model::note::{Note, SearchResult};
 
@@ -7,7 +7,6 @@ use crate::model::note::{Note, SearchResult};
 pub struct ContextMenuTarget {
     pub node_id: String,
     pub is_folder: bool,
-    #[allow(dead_code)]
     pub parent_folder_id: Option<String>,
 }
 
@@ -49,6 +48,7 @@ pub enum Message {
     NoteCreated(TreeNode),
     NoteLoaded(Note),
     NoteLoadedEditing(Note),
+    NoteMoved(NoteMeta),
     SaveNote,
     NoteSaved,
 
@@ -96,9 +96,20 @@ pub enum Message {
     // 上下文菜单
     ShowContextMenu(ContextMenuTarget),
     HideContextMenu,
+    BackToContextMenu,
+    OpenMoveNoteMenu(String, String),
+    MoveFolderOptionsLoaded(String, String, Vec<Folder>),
+    MoveNoteToFolder(String, String),
 
     // 鼠标位置（用于右键菜单定位）
     CursorMoved(iced::Point),
+
+    // 拖拽移动笔记
+    StartNoteDrag(String),
+    FinishNoteDrag,
+    NoteDragEnteredFolder(String),
+    NoteDragLeftFolder(String),
+    DropDraggedNoteOnFolder(String),
 
     // 重命名
     StartRename(String, bool, String),

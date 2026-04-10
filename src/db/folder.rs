@@ -90,6 +90,27 @@ pub fn load_children(conn: &Connection, folder_id: &str) -> Result<Vec<TreeNode>
     Ok(children)
 }
 
+/// 加载全部文件夹（用于移动笔记时选择目标目录）
+pub fn load_all_folders(conn: &Connection) -> Result<Vec<Folder>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, parent_id, name, sort_order, created_at, updated_at
+         FROM folders
+         ORDER BY sort_order, name",
+    )?;
+
+    stmt.query_map([], |row| {
+        Ok(Folder {
+            id: row.get(0)?,
+            parent_id: row.get(1)?,
+            name: row.get(2)?,
+            sort_order: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    })?
+    .collect::<Result<_, _>>()
+}
+
 /// 创建文件夹
 pub fn create_folder(
     conn: &Connection,

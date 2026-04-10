@@ -1,5 +1,6 @@
 use rusqlite::{Connection, params};
 
+use crate::model::folder::NoteMeta;
 use crate::model::note::{Note, SearchResult};
 use crate::util::id::new_id;
 
@@ -88,6 +89,42 @@ pub fn rename_note(conn: &Connection, id: &str, title: &str) -> Result<(), rusql
 pub fn delete_note(conn: &Connection, id: &str) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+/// 移动笔记到目标文件夹，并将排序放到目标文件夹末尾
+pub fn move_note(
+    conn: &Connection,
+    note_id: &str,
+    folder_id: &str,
+) -> Result<NoteMeta, rusqlite::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let max_order: i32 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM notes WHERE folder_id = ?1",
+            params![folder_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    conn.execute(
+        "UPDATE notes
+         SET folder_id = ?1, sort_order = ?2, updated_at = ?3
+         WHERE id = ?4",
+        params![folder_id, max_order + 1, now, note_id],
+    )?;
+
+    conn.query_row(
+        "SELECT id, folder_id, title, sort_order FROM notes WHERE id = ?1",
+        params![note_id],
+        |row| {
+            Ok(NoteMeta {
+                id: row.get(0)?,
+                folder_id: row.get(1)?,
+                title: row.get(2)?,
+                sort_order: row.get(3)?,
+            })
+        },
+    )
 }
 
 fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
@@ -308,6 +345,34 @@ pub fn search_notes(conn: &Connection, query: &str) -> Result<Vec<SearchResult>,
     }
 
     Ok(all_results)
+}
+
+#[cfg(test)]
+mod move_tests {
+    use rusqlite::Connection;
+
+    #[test]
+    fn move_note_updates_folder_and_sort_order() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migration::run(&mut conn).expect("run migrations");
+
+        let source =
+            crate::db::folder::create_folder(&conn, None, "source").expect("create source folder");
+        let target =
+            crate::db::folder::create_folder(&conn, None, "target").expect("create target folder");
+
+        let first =
+            crate::db::note::create_note(&conn, &target.id, "first").expect("create first note");
+        let moved =
+            crate::db::note::create_note(&conn, &source.id, "moved").expect("create moved note");
+
+        let updated =
+            super::move_note(&conn, &moved.id, &target.id).expect("move note to target folder");
+
+        assert_eq!(updated.folder_id, target.id);
+        assert_eq!(updated.id, moved.id);
+        assert_eq!(updated.sort_order, first.sort_order + 1);
+    }
 }
 
 #[cfg(test)]

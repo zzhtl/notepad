@@ -1,46 +1,44 @@
 use iced::widget::{Space, button, column, container, mouse_area, row, text, text_input};
-use iced::{Border, Element, Font, Length, Theme, font};
+use iced::{Border, Element, Font, Length, Theme, font, mouse};
 
 use crate::app::{PendingCreate, update::pending_input_id};
 use crate::message::{ContextMenuTarget, Message};
 use crate::model::folder::TreeNode;
 
-/// 选中状态的按钮样式
-fn tree_node_selected(theme: &Theme, _status: button::Status) -> button::Style {
+fn tree_node_style(
+    theme: &Theme,
+    selected: bool,
+    drop_target: bool,
+    dragging: bool,
+) -> container::Style {
     let palette = theme.extended_palette();
-    button::Style {
-        background: Some(palette.primary.weak.color.into()),
-        text_color: palette.primary.weak.text,
+
+    let background = if drop_target {
+        palette.primary.base.color
+    } else if selected {
+        palette.primary.weak.color
+    } else if dragging {
+        palette.background.strong.color
+    } else {
+        palette.background.base.color.scale_alpha(0.0)
+    };
+
+    let text_color = if drop_target {
+        palette.primary.base.text
+    } else if selected {
+        palette.primary.weak.text
+    } else {
+        palette.background.base.text
+    };
+
+    container::Style {
+        background: Some(background.into()),
+        text_color: Some(text_color),
         border: Border {
             radius: 4.0.into(),
             ..Default::default()
         },
-        ..button::Style::default()
-    }
-}
-
-/// 默认状态的按钮样式（含 hover 效果）
-fn tree_node_default(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-    match status {
-        button::Status::Hovered => button::Style {
-            background: Some(palette.background.weak.color.into()),
-            text_color: palette.background.base.text,
-            border: Border {
-                radius: 4.0.into(),
-                ..Default::default()
-            },
-            ..button::Style::default()
-        },
-        _ => button::Style {
-            background: None,
-            text_color: palette.background.base.text,
-            border: Border {
-                radius: 4.0.into(),
-                ..Default::default()
-            },
-            ..button::Style::default()
-        },
+        ..container::Style::default()
     }
 }
 
@@ -59,6 +57,8 @@ pub fn render_tree_node<'a>(
     depth: usize,
     rename_state: Option<(&'a str, &'a str)>,
     pending_create: Option<&'a PendingCreate>,
+    dragging_note_id: Option<&'a str>,
+    drag_hover_folder_id: Option<&'a str>,
 ) -> Element<'a, Message> {
     let indent = 8.0 + (depth as f32) * 20.0;
     let is_selected = selected_id == Some(node.id());
@@ -77,12 +77,7 @@ pub fn render_tree_node<'a>(
             ..
         } => {
             let icon = if *expanded { "\u{25BE}" } else { "\u{25B8}" };
-
-            // 计算笔记数量
-            let note_count = children
-                .iter()
-                .filter(|c| matches!(c, TreeNode::Note { .. }))
-                .count();
+            let is_drop_target = drag_hover_folder_id == Some(folder.id.as_str());
 
             let label_content: Element<'a, Message> = if is_renaming {
                 let (_, current_input) = rename_state.unwrap();
@@ -100,25 +95,27 @@ pub fn render_tree_node<'a>(
                 .spacing(2)
                 .into()
             } else {
+                let note_count = children
+                    .iter()
+                    .filter(|c| matches!(c, TreeNode::Note { .. }))
+                    .count();
+
                 let mut label_row = row![
                     text(icon).size(12),
                     text(&folder.name).size(13).font(bold_font),
                 ]
                 .spacing(6);
+
                 if note_count > 0 {
                     label_row = label_row.push(Space::new().width(Length::Fill));
                     label_row =
                         label_row.push(text(format!("{note_count}")).size(10).style(count_style));
                 }
-                button(label_row)
-                    .on_press(Message::ToggleFolder(folder.id.clone()))
+
+                container(label_row)
                     .padding([5, 10])
                     .width(Length::Fill)
-                    .style(if is_selected {
-                        tree_node_selected
-                    } else {
-                        tree_node_default
-                    })
+                    .style(move |theme| tree_node_style(theme, is_selected, is_drop_target, false))
                     .into()
             };
 
@@ -132,7 +129,12 @@ pub fn render_tree_node<'a>(
                 Space::new().width(Length::Fixed(indent)),
                 label_content
             ])
-            .on_right_press(Message::ShowContextMenu(ctx));
+            .interaction(mouse::Interaction::Pointer)
+            .on_press(Message::ToggleFolder(folder.id.clone()))
+            .on_right_press(Message::ShowContextMenu(ctx))
+            .on_enter(Message::NoteDragEnteredFolder(folder.id.clone()))
+            .on_exit(Message::NoteDragLeftFolder(folder.id.clone()))
+            .on_release(Message::DropDraggedNoteOnFolder(folder.id.clone()));
 
             let mut items: Vec<Element<'a, Message>> = vec![label.into()];
 
@@ -144,10 +146,11 @@ pub fn render_tree_node<'a>(
                         depth + 1,
                         rename_state,
                         pending_create,
+                        dragging_note_id,
+                        drag_hover_folder_id,
                     ));
                 }
 
-                // 在文件夹内显示 pending create 输入框
                 if let Some(pending) = pending_create
                     && pending.parent_id.as_deref() == Some(&folder.id)
                 {
@@ -185,6 +188,8 @@ pub fn render_tree_node<'a>(
             column(items).spacing(1).into()
         }
         TreeNode::Note { meta } => {
+            let is_dragging = dragging_note_id == Some(meta.id.as_str());
+
             let label_content: Element<'a, Message> = if is_renaming {
                 let (_, current_input) = rename_state.unwrap();
                 row![
@@ -201,15 +206,10 @@ pub fn render_tree_node<'a>(
                 .spacing(2)
                 .into()
             } else {
-                button(row![text("\u{2022}").size(8), text(&meta.title).size(13)].spacing(6))
-                    .on_press(Message::SelectNote(meta.id.clone()))
+                container(row![text("\u{2022}").size(8), text(&meta.title).size(13)].spacing(6))
                     .padding([5, 10])
                     .width(Length::Fill)
-                    .style(if is_selected {
-                        tree_node_selected
-                    } else {
-                        tree_node_default
-                    })
+                    .style(move |theme| tree_node_style(theme, is_selected, false, is_dragging))
                     .into()
             };
 
@@ -223,6 +223,13 @@ pub fn render_tree_node<'a>(
                 Space::new().width(Length::Fixed(indent)),
                 label_content
             ])
+            .interaction(if is_renaming {
+                mouse::Interaction::Pointer
+            } else {
+                mouse::Interaction::Grab
+            })
+            .on_press(Message::StartNoteDrag(meta.id.clone()))
+            .on_release(Message::FinishNoteDrag)
             .on_right_press(Message::ShowContextMenu(ctx))
             .into()
         }

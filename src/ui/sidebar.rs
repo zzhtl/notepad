@@ -73,6 +73,8 @@ pub fn view<'a>(
     search_active: bool,
     search_results: &'a [SearchResult],
     pending_create: Option<&'a PendingCreate>,
+    dragging_note_id: Option<&'a str>,
+    drag_hover_folder_id: Option<&'a str>,
 ) -> Element<'a, Message> {
     // 顶部品牌
     let header = container(
@@ -148,12 +150,10 @@ pub fn view<'a>(
                                 Space::new().width(Length::Fixed(10.0)),
                                 text(location).size(10).style(search_result_meta),
                             ],
-                            container(
-                                row![
-                                    Space::new().width(Length::Fixed(10.0)),
-                                    text(&r.snippet).size(11).style(search_result_snippet),
-                                ],
-                            )
+                            container(row![
+                                Space::new().width(Length::Fixed(10.0)),
+                                text(&r.snippet).size(11).style(search_result_snippet),
+                            ],)
                             .width(Length::Fixed(220.0))
                             .clip(true),
                         ]
@@ -171,7 +171,17 @@ pub fn view<'a>(
     } else {
         let tree_items: Vec<Element<'a, Message>> = tree
             .iter()
-            .map(|node| render_tree_node(node, selected_id, 0, rename_state, pending_create))
+            .map(|node| {
+                render_tree_node(
+                    node,
+                    selected_id,
+                    0,
+                    rename_state,
+                    pending_create,
+                    dragging_note_id,
+                    drag_hover_folder_id,
+                )
+            })
             .collect();
 
         let mut tree_col: Vec<Element<'a, Message>> = Vec::new();

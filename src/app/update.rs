@@ -101,11 +101,7 @@ fn move_cursor_to_line(
 
     // 高亮选中匹配文本
     let selection = if match_len > 0 {
-        Some(clamped_position(
-            &active.content,
-            line,
-            column + match_len,
-        ))
+        Some(clamped_position(&active.content, line, column + match_len))
     } else {
         None
     };
@@ -171,6 +167,11 @@ fn sync_preview_task(active: &ActiveNote) -> Task<Message> {
 }
 
 impl App {
+    fn clear_note_drag_state(&mut self) {
+        self.dragging_note_id = None;
+        self.drag_hover_folder_id = None;
+    }
+
     fn take_pending_note_jump(&mut self, note_id: &str) -> Option<PendingNoteJump> {
         match self.pending_note_jump.take() {
             Some(jump) if jump.note_id == note_id => Some(jump),
@@ -263,9 +264,7 @@ impl App {
         );
 
         // 查看模式下从搜索导航：滚动到目标行
-        if !editing
-            && highlight_line.is_some()
-        {
+        if !editing && highlight_line.is_some() {
             return Task::batch([load_images_task, focus_readonly_editor()]);
         }
 
@@ -291,6 +290,52 @@ impl App {
             Message::FolderChildrenLoaded(folder_id, children) => {
                 tree_ops::set_children(&mut self.tree, &folder_id, children);
                 Task::none()
+            }
+
+            Message::StartNoteDrag(id) => {
+                self.context_menu = None;
+                self.move_note_state = None;
+                self.dragging_note_id = Some(id.clone());
+                self.drag_hover_folder_id = None;
+                self.update(Message::SelectNote(id))
+            }
+
+            Message::FinishNoteDrag => {
+                self.clear_note_drag_state();
+                Task::none()
+            }
+
+            Message::NoteDragEnteredFolder(folder_id) => {
+                if let Some(note_id) = self.dragging_note_id.as_deref()
+                    && tree_ops::find_folder_in_tree(&self.tree, note_id).as_deref()
+                        != Some(folder_id.as_str())
+                {
+                    self.drag_hover_folder_id = Some(folder_id);
+                }
+                Task::none()
+            }
+
+            Message::NoteDragLeftFolder(folder_id) => {
+                if self.drag_hover_folder_id.as_deref() == Some(folder_id.as_str()) {
+                    self.drag_hover_folder_id = None;
+                }
+                Task::none()
+            }
+
+            Message::DropDraggedNoteOnFolder(folder_id) => {
+                let Some(note_id) = self.dragging_note_id.clone() else {
+                    return Task::none();
+                };
+
+                self.clear_note_drag_state();
+
+                if tree_ops::find_folder_in_tree(&self.tree, &note_id).as_deref()
+                    == Some(&folder_id)
+                {
+                    return Task::none();
+                }
+
+                self.move_note_to_folder(note_id, folder_id)
             }
 
             Message::SelectNote(id) => {
@@ -627,6 +672,8 @@ impl App {
 
             Message::StartCreateSubFolder(parent_id) => {
                 self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
                 // 确保父文件夹展开
                 tree_ops::ensure_expanded(&mut self.tree, &parent_id);
                 self.pending_create = Some(PendingCreate {
@@ -639,6 +686,8 @@ impl App {
 
             Message::StartCreateNoteInFolder(folder_id) => {
                 self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
                 tree_ops::ensure_expanded(&mut self.tree, &folder_id);
                 self.pending_create = Some(PendingCreate {
                     parent_id: Some(folder_id),
@@ -732,6 +781,21 @@ impl App {
                 Task::none()
             }
 
+            Message::NoteMoved(meta) => {
+                tree_ops::move_note(&mut self.tree, meta.clone());
+
+                if let Some(active) = &mut self.active_note
+                    && active.note.id == meta.id
+                {
+                    active.note.folder_id = meta.folder_id;
+                }
+
+                self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
+                Task::none()
+            }
+
             Message::MarkdownLinkClicked(_url) => Task::none(),
 
             Message::InsertImage => crate::ui::image_picker::pick_image(),
@@ -806,15 +870,73 @@ impl App {
             // 上下文菜单
             Message::ShowContextMenu(target) => {
                 // 打开时快照当前鼠标位置，避免后续鼠标移动让菜单漂移
+                self.clear_note_drag_state();
                 self.context_menu_position = Some(self.cursor_position);
                 self.context_menu = Some(target);
+                self.move_note_state = None;
                 Task::none()
             }
 
             Message::HideContextMenu => {
                 self.context_menu = None;
                 self.context_menu_position = None;
+                self.move_note_state = None;
                 Task::none()
+            }
+
+            Message::BackToContextMenu => {
+                self.move_note_state = None;
+                Task::none()
+            }
+
+            Message::OpenMoveNoteMenu(note_id, current_folder_id) => {
+                self.move_note_state = Some(super::MoveNoteState {
+                    note_id: note_id.clone(),
+                    current_folder_id: current_folder_id.clone(),
+                    folders: Vec::new(),
+                    loading: true,
+                });
+
+                let db = self.db.clone();
+                Task::perform(
+                    async move { db.execute(crate::db::folder::load_all_folders).await },
+                    move |result| match result {
+                        Ok(folders) => {
+                            Message::MoveFolderOptionsLoaded(note_id, current_folder_id, folders)
+                        }
+                        Err(e) => Message::DbError(e.to_string()),
+                    },
+                )
+            }
+
+            Message::MoveFolderOptionsLoaded(note_id, current_folder_id, folders) => {
+                if let Some(state) = &mut self.move_note_state
+                    && state.note_id == note_id
+                {
+                    state.current_folder_id = current_folder_id;
+                    state.folders = super::build_move_folder_options(folders);
+                    state.loading = false;
+                }
+                Task::none()
+            }
+
+            Message::MoveNoteToFolder(note_id, folder_id) => {
+                let current_folder_id = self
+                    .move_note_state
+                    .as_ref()
+                    .map(|state| state.current_folder_id.clone())
+                    .or_else(|| tree_ops::find_folder_in_tree(&self.tree, &note_id));
+
+                self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
+                self.clear_note_drag_state();
+
+                if current_folder_id.as_deref() == Some(folder_id.as_str()) {
+                    Task::none()
+                } else {
+                    self.move_note_to_folder(note_id, folder_id)
+                }
             }
 
             Message::CursorMoved(point) => {
@@ -825,6 +947,7 @@ impl App {
             // 重命名
             Message::StartRename(id, is_folder, current_name) => {
                 self.context_menu = None;
+                self.move_note_state = None;
                 self.rename_state = Some(super::RenameState {
                     node_id: id,
                     is_folder,
@@ -880,6 +1003,8 @@ impl App {
             // 删除
             Message::DeleteNode(id, is_folder) => {
                 self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
                 let db = self.db.clone();
                 let id_clone = id.clone();
                 Task::perform(
@@ -985,6 +1110,13 @@ impl App {
             }
 
             Message::DbError(err) => {
+                if self
+                    .move_note_state
+                    .as_ref()
+                    .is_some_and(|state| state.loading)
+                {
+                    self.move_note_state = None;
+                }
                 self.error = Some(err);
                 Task::none()
             }
@@ -1048,6 +1180,9 @@ impl App {
                 ) {
                     if self.context_menu.is_some() {
                         self.context_menu = None;
+                        self.context_menu_position = None;
+                        self.move_note_state = None;
+                        self.clear_note_drag_state();
                         return Task::none();
                     }
                     if self.pending_create.is_some() {

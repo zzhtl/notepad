@@ -5,13 +5,14 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use iced::widget::{
-    Space, button, column, container, markdown, mouse_area, row, rule, stack, text, text_editor,
+    Space, button, column, container, markdown, mouse_area, row, rule, scrollable, stack, text,
+    text_editor,
 };
 use iced::{Border, Color, Element, Fill, Length, Padding, Point, Subscription, Task, Theme};
 
 use crate::db::DbPool;
 use crate::message::{ContextMenuTarget, Message};
-use crate::model::folder::TreeNode;
+use crate::model::folder::{Folder, TreeNode};
 use crate::model::note::Note;
 use crate::ui;
 
@@ -70,6 +71,20 @@ pub struct PendingCreate {
     pub input: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MoveFolderOption {
+    pub id: String,
+    pub name: String,
+    pub depth: usize,
+}
+
+pub(crate) struct MoveNoteState {
+    pub note_id: String,
+    pub current_folder_id: String,
+    pub folders: Vec<MoveFolderOption>,
+    pub loading: bool,
+}
+
 /// 应用主结构体
 pub struct App {
     pub(crate) db: DbPool,
@@ -87,10 +102,55 @@ pub struct App {
     pub(crate) last_note_click: Option<(String, Instant)>,
     pub(crate) dark_theme: bool,
     pub(crate) editor_font_size: u16,
+    pub(crate) dragging_note_id: Option<String>,
+    pub(crate) drag_hover_folder_id: Option<String>,
+    pub(crate) move_note_state: Option<MoveNoteState>,
     /// 实时跟踪的鼠标位置（窗口坐标），用于右键菜单定位
     pub(crate) cursor_position: Point,
     /// 右键菜单打开时锁定的位置快照（None 表示未打开）
     pub(crate) context_menu_position: Option<Point>,
+}
+
+fn build_move_folder_options(folders: Vec<Folder>) -> Vec<MoveFolderOption> {
+    fn visit(
+        by_parent: &HashMap<Option<String>, Vec<Folder>>,
+        parent_id: Option<String>,
+        depth: usize,
+        output: &mut Vec<MoveFolderOption>,
+    ) {
+        if let Some(children) = by_parent.get(&parent_id) {
+            for folder in children {
+                output.push(MoveFolderOption {
+                    id: folder.id.clone(),
+                    name: folder.name.clone(),
+                    depth,
+                });
+
+                visit(by_parent, Some(folder.id.clone()), depth + 1, output);
+            }
+        }
+    }
+
+    let mut by_parent: HashMap<Option<String>, Vec<Folder>> = HashMap::new();
+
+    for folder in folders {
+        by_parent
+            .entry(folder.parent_id.clone())
+            .or_default()
+            .push(folder);
+    }
+
+    for siblings in by_parent.values_mut() {
+        siblings.sort_by(|left, right| {
+            left.sort_order
+                .cmp(&right.sort_order)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+    }
+
+    let mut output = Vec::new();
+    visit(&by_parent, None, 0, &mut output);
+    output
 }
 
 impl App {
@@ -111,6 +171,9 @@ impl App {
             last_note_click: None,
             dark_theme: true,
             editor_font_size: 14,
+            dragging_note_id: None,
+            drag_hover_folder_id: None,
+            move_note_state: None,
             cursor_position: Point::ORIGIN,
             context_menu_position: None,
         };
@@ -137,6 +200,8 @@ impl App {
             self.search_active,
             &self.search_results,
             self.pending_create.as_ref(),
+            self.dragging_note_id.as_deref(),
+            self.drag_hover_folder_id.as_deref(),
         );
 
         let editor_area: Element<'_, Message> = if let Some(active) = &self.active_note {
@@ -175,67 +240,15 @@ impl App {
 
         // 用 mouse_area 包裹主视图以持续跟踪鼠标位置，供右键菜单弹出定位使用。
         // on_move 只观察事件而不捕获，不会影响子组件的交互。
-        let main_view: Element<'_, Message> = mouse_area(
-            container(content).width(Fill).height(Fill),
-        )
-        .on_move(Message::CursorMoved)
-        .into();
+        let main_view: Element<'_, Message> =
+            mouse_area(container(content).width(Fill).height(Fill))
+                .on_move(Message::CursorMoved)
+                .on_release(Message::FinishNoteDrag)
+                .into();
 
         // 上下文菜单覆盖层
         if let Some(ctx) = &self.context_menu {
             let node_name = self.find_node_name(&ctx.node_id).unwrap_or_default();
-            let mut menu_items: Vec<Element<'_, Message>> = Vec::new();
-
-            if ctx.is_folder {
-                menu_items.push(
-                    button(text("新建子文件夹").size(13))
-                        .on_press(Message::StartCreateSubFolder(ctx.node_id.clone()))
-                        .padding([4, 12])
-                        .width(Length::Fill)
-                        .style(button::text)
-                        .into(),
-                );
-                menu_items.push(
-                    button(text("新建笔记").size(13))
-                        .on_press(Message::StartCreateNoteInFolder(ctx.node_id.clone()))
-                        .padding([4, 12])
-                        .width(Length::Fill)
-                        .style(button::text)
-                        .into(),
-                );
-            } else {
-                // 笔记的右键菜单：编辑
-                menu_items.push(
-                    button(text("编辑").size(13))
-                        .on_press(Message::EditNote(ctx.node_id.clone()))
-                        .padding([4, 12])
-                        .width(Length::Fill)
-                        .style(button::text)
-                        .into(),
-                );
-            }
-
-            menu_items.push(
-                button(text("重命名").size(13))
-                    .on_press(Message::StartRename(
-                        ctx.node_id.clone(),
-                        ctx.is_folder,
-                        node_name,
-                    ))
-                    .padding([4, 12])
-                    .width(Length::Fill)
-                    .style(button::text)
-                    .into(),
-            );
-            menu_items.push(
-                button(text("删除").size(13))
-                    .on_press(Message::DeleteNode(ctx.node_id.clone(), ctx.is_folder))
-                    .padding([4, 12])
-                    .width(Length::Fill)
-                    .style(button::danger)
-                    .into(),
-            );
-
             let menu_style = |theme: &Theme| -> container::Style {
                 let palette = theme.extended_palette();
                 container::Style {
@@ -251,9 +264,155 @@ impl App {
                     ..container::Style::default()
                 }
             };
-            let menu = container(column(menu_items).spacing(1).width(Length::Fixed(180.0)))
-                .padding(6)
-                .style(menu_style);
+            let menu: Element<'_, Message> = if let Some(move_state) = &self.move_note_state {
+                let mut folder_items: Vec<Element<'_, Message>> = vec![
+                    container(text("移动到文件夹").size(13))
+                        .padding([4, 12])
+                        .into(),
+                    button(text("返回").size(13))
+                        .on_press(Message::BackToContextMenu)
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                ];
+
+                if move_state.loading {
+                    folder_items.push(
+                        container(text("正在加载文件夹...").size(13))
+                            .padding([6, 12])
+                            .width(Length::Fill)
+                            .into(),
+                    );
+                } else if move_state.folders.is_empty() {
+                    folder_items.push(
+                        container(text("没有可用文件夹").size(13))
+                            .padding([6, 12])
+                            .width(Length::Fill)
+                            .into(),
+                    );
+                } else {
+                    for folder in &move_state.folders {
+                        let indent = 12.0 + folder.depth as f32 * 16.0;
+                        let label = row![
+                            Space::new().width(Length::Fixed(indent)),
+                            text(&folder.name).size(13),
+                        ];
+
+                        if folder.id == move_state.current_folder_id {
+                            folder_items.push(
+                                container(label.push(text("（当前）").size(12).style(
+                                    |theme: &Theme| {
+                                        let palette = theme.extended_palette();
+                                        text::Style {
+                                            color: Some(palette.background.weak.text),
+                                        }
+                                    },
+                                )))
+                                .padding([4, 12])
+                                .width(Length::Fill)
+                                .into(),
+                            );
+                        } else {
+                            folder_items.push(
+                                button(label)
+                                    .on_press(Message::MoveNoteToFolder(
+                                        move_state.note_id.clone(),
+                                        folder.id.clone(),
+                                    ))
+                                    .padding([4, 12])
+                                    .width(Length::Fill)
+                                    .style(button::text)
+                                    .into(),
+                            );
+                        }
+                    }
+                }
+
+                let content: Element<'_, Message> = if folder_items.len() > 10 {
+                    scrollable(column(folder_items).spacing(1))
+                        .height(Length::Fixed(240.0))
+                        .into()
+                } else {
+                    column(folder_items).spacing(1).into()
+                };
+
+                container(content)
+                    .padding(6)
+                    .width(Length::Fixed(260.0))
+                    .style(menu_style)
+                    .into()
+            } else {
+                let mut menu_items: Vec<Element<'_, Message>> = Vec::new();
+
+                if ctx.is_folder {
+                    menu_items.push(
+                        button(text("新建子文件夹").size(13))
+                            .on_press(Message::StartCreateSubFolder(ctx.node_id.clone()))
+                            .padding([4, 12])
+                            .width(Length::Fill)
+                            .style(button::text)
+                            .into(),
+                    );
+                    menu_items.push(
+                        button(text("新建笔记").size(13))
+                            .on_press(Message::StartCreateNoteInFolder(ctx.node_id.clone()))
+                            .padding([4, 12])
+                            .width(Length::Fill)
+                            .style(button::text)
+                            .into(),
+                    );
+                } else {
+                    menu_items.push(
+                        button(text("编辑").size(13))
+                            .on_press(Message::EditNote(ctx.node_id.clone()))
+                            .padding([4, 12])
+                            .width(Length::Fill)
+                            .style(button::text)
+                            .into(),
+                    );
+
+                    if let Some(parent_folder_id) = &ctx.parent_folder_id {
+                        menu_items.push(
+                            button(text("移动到文件夹").size(13))
+                                .on_press(Message::OpenMoveNoteMenu(
+                                    ctx.node_id.clone(),
+                                    parent_folder_id.clone(),
+                                ))
+                                .padding([4, 12])
+                                .width(Length::Fill)
+                                .style(button::text)
+                                .into(),
+                        );
+                    }
+                }
+
+                menu_items.push(
+                    button(text("重命名").size(13))
+                        .on_press(Message::StartRename(
+                            ctx.node_id.clone(),
+                            ctx.is_folder,
+                            node_name,
+                        ))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                );
+                menu_items.push(
+                    button(text("删除").size(13))
+                        .on_press(Message::DeleteNode(ctx.node_id.clone(), ctx.is_folder))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::danger)
+                        .into(),
+                );
+
+                container(column(menu_items).spacing(1).width(Length::Fixed(180.0)))
+                    .padding(6)
+                    .style(menu_style)
+                    .into()
+            };
 
             let dismiss = mouse_area(Space::new().width(Fill).height(Fill))
                 .on_press(Message::HideContextMenu);
@@ -336,6 +495,20 @@ impl App {
                         sort_order: note.sort_order,
                     },
                 }),
+                Err(e) => Message::DbError(e.to_string()),
+            },
+        )
+    }
+
+    pub(crate) fn move_note_to_folder(&self, note_id: String, folder_id: String) -> Task<Message> {
+        let db = self.db.clone();
+        Task::perform(
+            async move {
+                db.execute(move |conn| crate::db::note::move_note(conn, &note_id, &folder_id))
+                    .await
+            },
+            |result| match result {
+                Ok(meta) => Message::NoteMoved(meta),
                 Err(e) => Message::DbError(e.to_string()),
             },
         )
