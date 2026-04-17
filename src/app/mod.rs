@@ -16,18 +16,6 @@ use crate::model::folder::{Folder, TreeNode};
 use crate::model::note::Note;
 use crate::ui;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewSyncMode {
-    Once,
-    FollowCursor,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PreviewSyncTarget {
-    pub line: usize,
-    pub mode: PreviewSyncMode,
-}
-
 #[derive(Debug, Clone)]
 pub struct PendingNoteJump {
     pub note_id: String,
@@ -44,9 +32,12 @@ pub struct ActiveNote {
     pub images: HashMap<String, iced::widget::image::Handle>,
     pub dirty: bool,
     pub last_edit: Instant,
+    pub editor_content_height: f32,
+    pub editor_viewport_height: f32,
+    pub editor_target: Option<usize>,
     pub preview_content_height: f32,
     pub preview_viewport_height: f32,
-    pub preview_target: Option<PreviewSyncTarget>,
+    pub preview_target: Option<usize>,
     pub editing: bool,
     pub undo_stack: Vec<String>,
     pub redo_stack: Vec<String>,

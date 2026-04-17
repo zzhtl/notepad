@@ -9,7 +9,7 @@ use crate::message::Message;
 use crate::model::{folder::TreeNode, note::Note};
 
 use super::tree_ops;
-use super::{ActiveNote, App, PendingCreate, PendingNoteJump, PreviewSyncMode, PreviewSyncTarget};
+use super::{ActiveNote, App, PendingCreate, PendingNoteJump};
 
 /// pending_create 内联输入框 ID
 pub fn pending_input_id() -> iced::widget::Id {
@@ -23,7 +23,7 @@ fn preview_scrollable_id() -> iced::widget::Id {
 
 const PREVIEW_SYNC_TOLERANCE: f32 = 4.0;
 
-/// 查看模式下：聚焦编辑器让 text_editor 自动滚动到光标位置
+/// 查看模式下聚焦只读编辑器，便于继续键盘选择/复制
 fn focus_readonly_editor() -> Task<Message> {
     iced::widget::operation::focus(crate::ui::editor::editor_id())
 }
@@ -64,14 +64,6 @@ fn rebuild_content_derived(active: &mut ActiveNote) {
     active.markdown_items = markdown::parse(&preview_content).collect();
 }
 
-fn preview_sync_mode(editing: bool) -> PreviewSyncMode {
-    if editing {
-        PreviewSyncMode::FollowCursor
-    } else {
-        PreviewSyncMode::Once
-    }
-}
-
 fn clamped_position(
     content: &text_editor::Content,
     line: usize,
@@ -95,7 +87,6 @@ fn move_cursor_to_line(
     line: usize,
     column: usize,
     match_len: usize,
-    mode: PreviewSyncMode,
 ) {
     let position = clamped_position(&active.content, line, column);
 
@@ -110,21 +101,18 @@ fn move_cursor_to_line(
         position,
         selection,
     });
-    active.preview_target = Some(PreviewSyncTarget {
-        line: position.line,
-        mode,
-    });
+    active.preview_target = Some(position.line);
 }
 
 fn sync_preview_to_cursor(active: &mut ActiveNote) {
-    let line = active.content.cursor().position.line;
-    active.preview_target = Some(PreviewSyncTarget {
-        line,
-        mode: PreviewSyncMode::FollowCursor,
-    });
+    active.preview_target = Some(active.content.cursor().position.line);
 }
 
-fn preview_offset_for_line(
+fn sync_editor_to_cursor(active: &mut ActiveNote) {
+    active.editor_target = Some(active.content.cursor().position.line);
+}
+
+fn scroll_offset_for_line(
     line: usize,
     total_lines: usize,
     content_height: f32,
@@ -149,13 +137,30 @@ fn preview_offset_for_line(
     Some(scrollable::AbsoluteOffset { x: 0.0, y })
 }
 
-fn sync_preview_task(active: &ActiveNote) -> Task<Message> {
-    let Some(target) = active.preview_target else {
+fn sync_editor_task(active: &ActiveNote) -> Task<Message> {
+    let Some(line) = active.editor_target else {
         return Task::none();
     };
 
-    let Some(offset) = preview_offset_for_line(
-        target.line,
+    let Some(offset) = scroll_offset_for_line(
+        line,
+        active.content.line_count(),
+        active.editor_content_height,
+        active.editor_viewport_height,
+    ) else {
+        return Task::none();
+    };
+
+    iced::widget::operation::scroll_to(crate::ui::editor::editor_scrollable_id(), offset)
+}
+
+fn sync_preview_task(active: &ActiveNote) -> Task<Message> {
+    let Some(line) = active.preview_target else {
+        return Task::none();
+    };
+
+    let Some(offset) = scroll_offset_for_line(
+        line,
         active.content.line_count(),
         active.preview_content_height,
         active.preview_viewport_height,
@@ -164,6 +169,19 @@ fn sync_preview_task(active: &ActiveNote) -> Task<Message> {
     };
 
     iced::widget::operation::scroll_to(preview_scrollable_id(), offset)
+}
+
+fn scroll_editor_by_lines(font_size: u16, lines: i32) -> Task<Message> {
+    if lines == 0 {
+        return Task::none();
+    }
+
+    let pixels = lines as f32 * font_size as f32 * crate::ui::editor::EDITOR_LINE_HEIGHT_FACTOR;
+
+    iced::widget::operation::scroll_by(
+        crate::ui::editor::editor_scrollable_id(),
+        scrollable::AbsoluteOffset { x: 0.0, y: pixels },
+    )
 }
 
 impl App {
@@ -217,15 +235,18 @@ impl App {
                 position,
                 selection,
             });
-            Some(PreviewSyncTarget {
-                line: position.line,
-                mode: preview_sync_mode(editing),
-            })
+            Some(position.line)
         } else if editing {
-            Some(PreviewSyncTarget {
-                line: content.cursor().position.line,
-                mode: PreviewSyncMode::FollowCursor,
-            })
+            Some(content.cursor().position.line)
+        } else {
+            None
+        };
+        let editor_target = if let Some(line) = preview_target {
+            Some(line)
+        } else if highlight_line.is_some() {
+            highlight_line
+        } else if editing {
+            Some(content.cursor().position.line)
         } else {
             None
         };
@@ -239,6 +260,9 @@ impl App {
             images: HashMap::new(),
             dirty: false,
             last_edit: Instant::now(),
+            editor_content_height: 0.0,
+            editor_viewport_height: 0.0,
+            editor_target,
             preview_content_height: 0.0,
             preview_viewport_height: 0.0,
             preview_target,
@@ -265,7 +289,13 @@ impl App {
 
         // 查看模式下从搜索导航：滚动到目标行
         if !editing && highlight_line.is_some() {
-            return Task::batch([load_images_task, focus_readonly_editor()]);
+            let editor_task = self
+                .active_note
+                .as_ref()
+                .map(sync_editor_task)
+                .unwrap_or_else(Task::none);
+
+            return Task::batch([load_images_task, focus_readonly_editor(), editor_task]);
         }
 
         load_images_task
@@ -354,8 +384,9 @@ impl App {
                         && active.note.id == id
                     {
                         active.editing = true;
+                        sync_editor_to_cursor(active);
                         sync_preview_to_cursor(active);
-                        return sync_preview_task(active);
+                        return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
                     }
                     // 不同笔记的双击：加载并直接进入编辑
                     self.pending_note_jump = None;
@@ -386,9 +417,11 @@ impl App {
                     self.selected_id = Some(id);
                     if active.editing {
                         active.editing = false;
+                        sync_editor_to_cursor(active);
                         active.preview_target = None;
                         active.highlight_query = None;
                         active.highlight_line = None;
+                        return sync_editor_task(active);
                     }
                     return Task::none();
                 }
@@ -442,12 +475,12 @@ impl App {
                         jump.line,
                         jump.column,
                         jump.match_len,
-                        preview_sync_mode(active.editing),
                     );
+                    active.editor_target = Some(active.content.cursor().position.line);
                     return if active.editing {
-                        sync_preview_task(active)
+                        Task::batch([sync_editor_task(active), sync_preview_task(active)])
                     } else {
-                        focus_readonly_editor()
+                        Task::batch([focus_readonly_editor(), sync_editor_task(active)])
                     };
                 }
 
@@ -487,14 +520,16 @@ impl App {
             Message::ToggleEditMode => {
                 if let Some(active) = &mut self.active_note {
                     active.editing = !active.editing;
+                    sync_editor_to_cursor(active);
                     if active.editing {
                         // 进入编辑模式时清空搜索高亮
                         active.highlight_query = None;
                         active.highlight_line = None;
                         sync_preview_to_cursor(active);
-                        return sync_preview_task(active);
+                        return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
                     }
                     active.preview_target = None;
+                    return sync_editor_task(active);
                 }
                 Task::none()
             }
@@ -520,6 +555,10 @@ impl App {
 
             Message::EditorAction(action) => {
                 if let Some(active) = &mut self.active_note {
+                    if let text_editor::Action::Scroll { lines } = &action {
+                        return scroll_editor_by_lines(self.editor_font_size, *lines);
+                    }
+
                     let is_edit = action.is_edit();
 
                     // 查看模式：只允许光标移动和选中，禁止编辑
@@ -550,8 +589,43 @@ impl App {
                         rebuild_content_derived(active);
                     }
 
-                    sync_preview_to_cursor(active);
-                    return sync_preview_task(active);
+                    // 不再强制滚动编辑器自身：text_editor 自身会保证光标在视口内，
+                    // 不需要把光标行强行居中，否则鼠标点击会让编辑内容跳到中间。
+                    // 预览仍随光标位置同步，便于点击 / 输入时右侧定位到对应内容。
+                    if active.editing {
+                        sync_preview_to_cursor(active);
+                        return sync_preview_task(active);
+                    }
+                    return Task::none();
+                }
+                Task::none()
+            }
+
+            Message::EditorScrolled(viewport) => {
+                if let Some(active) = &mut self.active_note {
+                    active.editor_content_height = viewport.content_bounds().height;
+                    active.editor_viewport_height = viewport.bounds().height;
+
+                    if let Some(line) = active.editor_target {
+                        let Some(offset) = scroll_offset_for_line(
+                            line,
+                            active.content.line_count(),
+                            active.editor_content_height,
+                            active.editor_viewport_height,
+                        ) else {
+                            return Task::none();
+                        };
+
+                        let current_y = viewport.absolute_offset().y;
+                        if (current_y - offset.y).abs() > PREVIEW_SYNC_TOLERANCE {
+                            return iced::widget::operation::scroll_to(
+                                crate::ui::editor::editor_scrollable_id(),
+                                offset,
+                            );
+                        }
+
+                        active.editor_target = None;
+                    }
                 }
                 Task::none()
             }
@@ -561,9 +635,9 @@ impl App {
                     active.preview_content_height = viewport.content_bounds().height;
                     active.preview_viewport_height = viewport.bounds().height;
 
-                    if let Some(target) = active.preview_target {
-                        let Some(offset) = preview_offset_for_line(
-                            target.line,
+                    if let Some(line) = active.preview_target {
+                        let Some(offset) = scroll_offset_for_line(
+                            line,
                             active.content.line_count(),
                             active.preview_content_height,
                             active.preview_viewport_height,
@@ -579,9 +653,8 @@ impl App {
                             );
                         }
 
-                        if matches!(target.mode, PreviewSyncMode::Once) {
-                            active.preview_target = None;
-                        }
+                        // 一次同步后释放 target，用户可自由滚动预览
+                        active.preview_target = None;
                     }
                 }
                 Task::none()
@@ -605,8 +678,9 @@ impl App {
                     rebuild_content_derived(active);
                     active.dirty = true;
                     active.last_edit = Instant::now();
+                    sync_editor_to_cursor(active);
                     sync_preview_to_cursor(active);
-                    return sync_preview_task(active);
+                    return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
                 }
                 Task::none()
             }
@@ -621,8 +695,9 @@ impl App {
                     rebuild_content_derived(active);
                     active.dirty = true;
                     active.last_edit = Instant::now();
+                    sync_editor_to_cursor(active);
                     sync_preview_to_cursor(active);
-                    return sync_preview_task(active);
+                    return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
                 }
                 Task::none()
             }
@@ -853,13 +928,16 @@ impl App {
                     rebuild_content_derived(active);
                     active.dirty = true;
                     active.last_edit = Instant::now();
+                    sync_editor_to_cursor(active);
                     sync_preview_to_cursor(active);
                 }
                 // focus 编辑器以便后续直接键入
                 let sync_task = self
                     .active_note
                     .as_ref()
-                    .map(sync_preview_task)
+                    .map(|active| {
+                        Task::batch([sync_editor_task(active), sync_preview_task(active)])
+                    })
                     .unwrap_or_else(Task::none);
                 Task::batch([
                     sync_task,
@@ -1134,6 +1212,11 @@ impl App {
             Message::ChangeFontSize(delta) => {
                 let new_size = (self.editor_font_size as i32 + delta as i32).clamp(10, 28);
                 self.editor_font_size = new_size as u16;
+                if let Some(active) = &mut self.active_note {
+                    sync_editor_to_cursor(active);
+                    sync_preview_to_cursor(active);
+                    return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
+                }
                 Task::none()
             }
 
@@ -1159,12 +1242,15 @@ impl App {
                     rebuild_content_derived(active);
                     active.dirty = true;
                     active.last_edit = Instant::now();
+                    sync_editor_to_cursor(active);
                     sync_preview_to_cursor(active);
                 }
                 let sync_task = self
                     .active_note
                     .as_ref()
-                    .map(sync_preview_task)
+                    .map(|active| {
+                        Task::batch([sync_editor_task(active), sync_preview_task(active)])
+                    })
                     .unwrap_or_else(Task::none);
                 Task::batch([
                     sync_task,

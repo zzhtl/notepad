@@ -78,6 +78,9 @@ pub enum Message {
     Undo,
     Redo,
 
+    // 编辑区滚动
+    EditorScrolled(iced::widget::scrollable::Viewport),
+
     // 同步滚动
     PreviewScrolled(iced::widget::scrollable::Viewport),
 

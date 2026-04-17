@@ -7,10 +7,25 @@ use crate::ui::md_viewer::NotepadViewer;
 use crate::ui::search_highlight::{SearchHighlightSettings, SearchHighlighter, to_format};
 
 const PREVIEW_MAX_WIDTH: f32 = 920.0;
+pub const EDITOR_LINE_HEIGHT_FACTOR: f32 = 1.3;
 
 /// 编辑器 ID（供 focus 操作使用）
 pub fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("note-editor")
+}
+
+/// 编辑区 scrollable ID（供程序化滚动使用）
+pub fn editor_scrollable_id() -> iced::widget::Id {
+    iced::widget::Id::new("note-editor-scrollable")
+}
+
+fn note_scrollbar_direction() -> scrollable::Direction {
+    scrollable::Direction::Vertical(
+        scrollable::Scrollbar::default()
+            .width(12)
+            .scroller_width(12)
+            .spacing(8),
+    )
 }
 
 /// 渲染编辑模式：左右分屏
@@ -19,7 +34,13 @@ fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Elem
         .id(editor_id())
         .on_action(Message::EditorAction)
         .size(font_size as f32)
+        .line_height(EDITOR_LINE_HEIGHT_FACTOR)
         .padding(12)
+        .height(iced::Length::Shrink);
+    let editor = scrollable(editor)
+        .id(editor_scrollable_id())
+        .on_scroll(Message::EditorScrolled)
+        .direction(note_scrollbar_direction())
         .height(Fill);
 
     let md_settings = markdown::Settings::from(theme);
@@ -38,6 +59,7 @@ fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Elem
         scrollable(preview_content)
             .id(iced::widget::Id::new("preview-scrollable"))
             .on_scroll(Message::PreviewScrolled)
+            .direction(note_scrollbar_direction())
             .height(Fill),
     )
     .padding(16)
@@ -67,9 +89,15 @@ fn view_readonly<'a>(
         .id(editor_id())
         .on_action(Message::EditorAction)
         .size(font_size as f32)
+        .line_height(EDITOR_LINE_HEIGHT_FACTOR)
         .padding([20, 32])
-        .height(Fill)
+        .height(iced::Length::Shrink)
         .highlight_with::<SearchHighlighter>(settings, to_format);
+    let editor = scrollable(editor)
+        .id(editor_scrollable_id())
+        .on_scroll(Message::EditorScrolled)
+        .direction(note_scrollbar_direction())
+        .height(Fill);
 
     container(editor).width(Fill).height(Fill).into()
 }
