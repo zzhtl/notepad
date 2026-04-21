@@ -1,4 +1,4 @@
-use iced::widget::{Space, button, container, row, text, tooltip};
+use iced::widget::{Space, button, container, row, text, text_input, tooltip};
 use iced::{Border, Element, Fill, Length, Theme};
 
 use crate::message::{MdShortcut, Message};
@@ -52,6 +52,68 @@ fn md_btn<'a>(kind: MdShortcut) -> Element<'a, Message> {
     .into()
 }
 
+/// 当前笔记搜索输入框 ID
+pub fn note_search_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("note-search-input")
+}
+
+fn note_search_row<'a>(
+    query: &'a str,
+    current_match: usize,
+    total_matches: usize,
+) -> Element<'a, Message> {
+    let previous = if total_matches > 0 {
+        button(text("\u{2191}").size(12))
+            .on_press(Message::NoteSearchPrevious)
+            .padding([4, 8])
+            .style(button::secondary)
+    } else {
+        button(text("\u{2191}").size(12))
+            .padding([4, 8])
+            .style(button::secondary)
+    };
+
+    let next = if total_matches > 0 {
+        button(text("\u{2193}").size(12))
+            .on_press(Message::NoteSearchNext)
+            .padding([4, 8])
+            .style(button::secondary)
+    } else {
+        button(text("\u{2193}").size(12))
+            .padding([4, 8])
+            .style(button::secondary)
+    };
+
+    let clear = if query.is_empty() {
+        button(text("\u{2715}").size(11))
+            .padding([4, 8])
+            .style(button::secondary)
+    } else {
+        button(text("\u{2715}").size(11))
+            .on_press(Message::ClearNoteSearch)
+            .padding([4, 8])
+            .style(button::secondary)
+    };
+
+    row![
+        text("查找").size(11),
+        text_input("搜索当前笔记... (Ctrl+F)", query)
+            .id(note_search_input_id())
+            .on_input(Message::NoteSearchQueryChanged)
+            .on_submit(Message::NoteSearchNext)
+            .size(12)
+            .padding([5, 8])
+            .width(Length::Fixed(220.0)),
+        text(format!("{current_match}/{total_matches}")).size(11),
+        previous,
+        next,
+        clear,
+    ]
+    .spacing(6)
+    .align_y(iced::Center)
+    .into()
+}
+
 /// 渲染编辑器工具栏
 pub fn view<'a>(
     title: &'a str,
@@ -59,8 +121,12 @@ pub fn view<'a>(
     editing: bool,
     dark_theme: bool,
     font_size: u16,
+    note_search_query: &'a str,
+    current_match: usize,
+    total_matches: usize,
 ) -> Element<'a, Message> {
     let title_text = text(title).size(15).style(title_style);
+    let note_search = note_search_row(note_search_query, current_match, total_matches);
 
     let theme_icon = if dark_theme { "\u{2600}" } else { "\u{263D}" };
 
@@ -187,7 +253,7 @@ pub fn view<'a>(
         .align_y(iced::Center);
 
         container(
-            iced::widget::column![action_row, md_row,]
+            iced::widget::column![action_row, note_search, md_row,]
                 .spacing(6)
                 .padding([8, 12]),
         )
@@ -201,42 +267,46 @@ pub fn view<'a>(
         };
 
         container(
-            row![
-                title_text,
-                Space::new().width(Length::Fixed(10.0)),
-                dirty_label,
-                Space::new().width(Fill),
-                tooltip(
-                    button(text("编辑").size(11))
-                        .on_press(Message::ToggleEditMode)
-                        .padding([4, 12])
-                        .style(button::primary),
-                    "Ctrl+E 或双击笔记",
-                    tooltip::Position::Bottom,
-                )
-                .gap(4),
-                tooltip(
-                    button(text("导出").size(11))
-                        .on_press(Message::ExportNote)
-                        .padding([4, 12])
-                        .style(button::secondary),
-                    "导出为 .md 文件",
-                    tooltip::Position::Bottom,
-                )
-                .gap(4),
-                tooltip(
-                    button(text(theme_icon).size(12))
-                        .on_press(Message::ToggleTheme)
-                        .padding([4, 8])
-                        .style(button::secondary),
-                    "切换主题",
-                    tooltip::Position::Bottom,
-                )
-                .gap(4),
+            iced::widget::column![
+                row![
+                    title_text,
+                    Space::new().width(Length::Fixed(10.0)),
+                    dirty_label,
+                    Space::new().width(Fill),
+                    tooltip(
+                        button(text("编辑").size(11))
+                            .on_press(Message::ToggleEditMode)
+                            .padding([4, 12])
+                            .style(button::primary),
+                        "Ctrl+E 或双击笔记",
+                        tooltip::Position::Bottom,
+                    )
+                    .gap(4),
+                    tooltip(
+                        button(text("导出").size(11))
+                            .on_press(Message::ExportNote)
+                            .padding([4, 12])
+                            .style(button::secondary),
+                        "导出为 .md 文件",
+                        tooltip::Position::Bottom,
+                    )
+                    .gap(4),
+                    tooltip(
+                        button(text(theme_icon).size(12))
+                            .on_press(Message::ToggleTheme)
+                            .padding([4, 8])
+                            .style(button::secondary),
+                        "切换主题",
+                        tooltip::Position::Bottom,
+                    )
+                    .gap(4),
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
+                note_search,
             ]
             .spacing(6)
-            .padding([8, 12])
-            .align_y(iced::Center),
+            .padding([8, 12]),
         )
         .style(toolbar_style)
         .into()

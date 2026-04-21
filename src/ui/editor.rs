@@ -30,13 +30,19 @@ fn note_scrollbar_direction() -> scrollable::Direction {
 
 /// 渲染编辑模式：左右分屏
 fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Element<'a, Message> {
+    let settings = SearchHighlightSettings::from_matches(
+        &active.note_search_matches,
+        active.note_search_index,
+    );
+
     let editor = text_editor(&active.content)
         .id(editor_id())
         .on_action(Message::EditorAction)
         .size(font_size as f32)
         .line_height(EDITOR_LINE_HEIGHT_FACTOR)
         .padding(12)
-        .height(iced::Length::Shrink);
+        .height(iced::Length::Shrink)
+        .highlight_with::<SearchHighlighter>(settings, to_format);
     let editor = scrollable(editor)
         .id(editor_scrollable_id())
         .on_scroll(Message::EditorScrolled)
@@ -81,9 +87,10 @@ fn view_readonly<'a>(
     _theme: &Theme,
     font_size: u16,
 ) -> Element<'a, Message> {
-    let settings = SearchHighlightSettings {
-        query: active.highlight_query.clone(),
-    };
+    let settings = SearchHighlightSettings::from_matches(
+        &active.note_search_matches,
+        active.note_search_index,
+    );
 
     let editor = text_editor(&active.content)
         .id(editor_id())

@@ -9,7 +9,7 @@ use crate::message::Message;
 use crate::model::{folder::TreeNode, note::Note};
 
 use super::tree_ops;
-use super::{ActiveNote, App, PendingCreate, PendingNoteJump};
+use super::{ActiveNote, App, NoteSearchMatch, PendingCreate, PendingNoteJump};
 
 /// pending_create 内联输入框 ID
 pub fn pending_input_id() -> iced::widget::Id {
@@ -64,6 +64,132 @@ fn rebuild_content_derived(active: &mut ActiveNote) {
     active.markdown_items = markdown::parse(&preview_content).collect();
 }
 
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+
+    let needle = needle.to_lowercase();
+
+    for (start, _) in haystack.char_indices() {
+        let mut lowered = String::new();
+
+        for ch in haystack[start..].chars() {
+            lowered.extend(ch.to_lowercase());
+
+            if lowered == needle {
+                return Some(start);
+            }
+
+            if lowered.len() >= needle.len() || !needle.starts_with(&lowered) {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+fn locate_note_search_matches(content: &str, query: &str) -> Vec<NoteSearchMatch> {
+    let mut matches = Vec::new();
+    let mut search_from = 0;
+    let mut line = 0;
+    let mut column = 0;
+    let mut byte_column = 0;
+    let match_len = query.chars().count().max(1);
+
+    while let Some(byte_index) = find_case_insensitive(&content[search_from..], query) {
+        let abs_byte_index = search_from + byte_index;
+
+        for ch in content[search_from..abs_byte_index].chars() {
+            if ch == '\n' {
+                line += 1;
+                column = 0;
+                byte_column = 0;
+            } else {
+                column += 1;
+                byte_column += ch.len_utf8();
+            }
+        }
+
+        let matched_bytes = content[abs_byte_index..]
+            .chars()
+            .take(match_len)
+            .map(char::len_utf8)
+            .sum::<usize>()
+            .max(1);
+
+        matches.push(NoteSearchMatch {
+            line,
+            column,
+            match_len,
+            byte_column,
+            byte_len: matched_bytes,
+        });
+
+        let next_start = abs_byte_index + matched_bytes;
+
+        for ch in content[abs_byte_index..next_start.min(content.len())].chars() {
+            if ch == '\n' {
+                line += 1;
+                column = 0;
+                byte_column = 0;
+            } else {
+                column += 1;
+                byte_column += ch.len_utf8();
+            }
+        }
+
+        search_from = next_start;
+        if search_from >= content.len() {
+            break;
+        }
+    }
+
+    matches
+}
+
+fn clear_note_search(active: &mut ActiveNote) {
+    active.note_search_query.clear();
+    active.note_search_matches.clear();
+    active.note_search_index = None;
+}
+
+fn refresh_note_search(active: &mut ActiveNote, preferred: Option<(usize, usize)>) {
+    if active.note_search_query.is_empty() {
+        clear_note_search(active);
+        return;
+    }
+
+    let previous = preferred.or_else(|| {
+        active
+            .note_search_index
+            .and_then(|index| active.note_search_matches.get(index))
+            .map(|matched| (matched.line, matched.column))
+    });
+    let previous_index = active.note_search_index;
+
+    active.note_search_matches =
+        locate_note_search_matches(&active.note.content, &active.note_search_query);
+
+    active.note_search_index = if active.note_search_matches.is_empty() {
+        None
+    } else if let Some((line, column)) = previous {
+        active
+            .note_search_matches
+            .iter()
+            .position(|matched| matched.line == line && matched.column == column)
+            .or_else(|| previous_index.map(|index| index.min(active.note_search_matches.len() - 1)))
+            .or(Some(0))
+    } else {
+        Some(
+            previous_index
+                .unwrap_or(0)
+                .min(active.note_search_matches.len() - 1),
+        )
+    };
+}
+
 fn clamped_position(
     content: &text_editor::Content,
     line: usize,
@@ -82,12 +208,7 @@ fn clamped_position(
     }
 }
 
-fn move_cursor_to_line(
-    active: &mut ActiveNote,
-    line: usize,
-    column: usize,
-    match_len: usize,
-) {
+fn move_cursor_to_line(active: &mut ActiveNote, line: usize, column: usize, match_len: usize) {
     let position = clamped_position(&active.content, line, column);
 
     // 高亮选中匹配文本
@@ -102,6 +223,33 @@ fn move_cursor_to_line(
         selection,
     });
     active.preview_target = Some(position.line);
+}
+
+fn select_note_search_match(
+    active: &mut ActiveNote,
+    index: usize,
+    focus_readonly: bool,
+) -> Task<Message> {
+    let Some(matched) = active.note_search_matches.get(index).copied() else {
+        active.note_search_index = None;
+        return Task::none();
+    };
+
+    active.note_search_index = Some(index);
+    move_cursor_to_line(active, matched.line, matched.column, matched.match_len);
+    active.editor_target = Some(active.content.cursor().position.line);
+
+    if active.editing {
+        sync_preview_to_cursor(active);
+        return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
+    }
+
+    let editor_task = sync_editor_task(active);
+    if focus_readonly {
+        Task::batch([focus_readonly_editor(), editor_task])
+    } else {
+        editor_task
+    }
 }
 
 fn sync_preview_to_cursor(active: &mut ActiveNote) {
@@ -205,22 +353,13 @@ impl App {
         let note_id = note.id.clone();
         let jump = self.take_pending_note_jump(&note_id);
         let mut content = text_editor::Content::with_text(&note.content);
-
-        // 搜索导航：提取高亮查询词和目标行（在 jump 被消费前）
-        let (highlight_query, highlight_line) = if let Some(ref j) = jump {
-            (
-                if self.search_active {
-                    Some(self.search_query.clone())
-                } else {
-                    None
-                },
-                Some(j.line),
-            )
+        let note_search_query = if self.search_active && jump.is_some() {
+            self.search_query.clone()
         } else {
-            (None, None)
+            String::new()
         };
 
-        let preview_target = if let Some(jump) = jump {
+        let preview_target = if let Some(jump) = jump.as_ref() {
             let position = clamped_position(&content, jump.line, jump.column);
             let selection = if jump.match_len > 0 {
                 Some(clamped_position(
@@ -243,8 +382,6 @@ impl App {
         };
         let editor_target = if let Some(line) = preview_target {
             Some(line)
-        } else if highlight_line.is_some() {
-            highlight_line
         } else if editing {
             Some(content.cursor().position.line)
         } else {
@@ -253,7 +390,7 @@ impl App {
         let preview_content = preprocess_for_preview(&note.content);
         let items = markdown::parse(&preview_content).collect();
 
-        self.active_note = Some(ActiveNote {
+        let mut active = ActiveNote {
             content,
             markdown_items: items,
             note,
@@ -270,9 +407,17 @@ impl App {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_undo_push: Instant::now() - std::time::Duration::from_secs(10),
-            highlight_query,
-            highlight_line,
-        });
+            note_search_query,
+            note_search_matches: Vec::new(),
+            note_search_index: None,
+        };
+
+        refresh_note_search(
+            &mut active,
+            jump.as_ref().map(|matched| (matched.line, matched.column)),
+        );
+
+        self.active_note = Some(active);
 
         // 异步加载图片
         let db = self.db.clone();
@@ -288,7 +433,7 @@ impl App {
         );
 
         // 查看模式下从搜索导航：滚动到目标行
-        if !editing && highlight_line.is_some() {
+        if !editing && jump.is_some() {
             let editor_task = self
                 .active_note
                 .as_ref()
@@ -419,8 +564,6 @@ impl App {
                         active.editing = false;
                         sync_editor_to_cursor(active);
                         active.preview_target = None;
-                        active.highlight_query = None;
-                        active.highlight_line = None;
                         return sync_editor_task(active);
                     }
                     return Task::none();
@@ -449,12 +592,12 @@ impl App {
             }
 
             Message::OpenSearchResult(result) => {
-                let jump = PendingNoteJump {
+                let jump = result.match_line.map(|line| PendingNoteJump {
                     note_id: result.note_id.clone(),
-                    line: result.match_line.unwrap_or(0),
+                    line,
                     column: result.match_column.unwrap_or(0),
                     match_len: result.match_len,
-                };
+                });
 
                 self.selected_id = Some(result.note_id.clone());
                 self.context_menu = None;
@@ -462,29 +605,25 @@ impl App {
                 if let Some(active) = &mut self.active_note
                     && active.note.id == result.note_id
                 {
-                    // 设置搜索高亮状态
-                    active.highlight_query = if self.search_active {
-                        Some(self.search_query.clone())
-                    } else {
-                        None
-                    };
-                    active.highlight_line = Some(jump.line);
+                    if let Some(jump) = jump {
+                        if self.search_active {
+                            active.note_search_query = self.search_query.clone();
+                            refresh_note_search(active, Some((jump.line, jump.column)));
+                        } else {
+                            clear_note_search(active);
+                        }
 
-                    move_cursor_to_line(
-                        active,
-                        jump.line,
-                        jump.column,
-                        jump.match_len,
-                    );
-                    active.editor_target = Some(active.content.cursor().position.line);
-                    return if active.editing {
-                        Task::batch([sync_editor_task(active), sync_preview_task(active)])
+                        if let Some(index) = active.note_search_index {
+                            return select_note_search_match(active, index, !active.editing);
+                        }
                     } else {
-                        Task::batch([focus_readonly_editor(), sync_editor_task(active)])
-                    };
+                        clear_note_search(active);
+                    }
+
+                    return Task::none();
                 }
 
-                self.pending_note_jump = Some(jump);
+                self.pending_note_jump = jump;
                 let save_task = self.save_if_dirty();
                 let db = self.db.clone();
                 let note_id = result.note_id;
@@ -522,9 +661,6 @@ impl App {
                     active.editing = !active.editing;
                     sync_editor_to_cursor(active);
                     if active.editing {
-                        // 进入编辑模式时清空搜索高亮
-                        active.highlight_query = None;
-                        active.highlight_line = None;
                         sync_preview_to_cursor(active);
                         return Task::batch([sync_editor_task(active), sync_preview_task(active)]);
                     }
@@ -587,6 +723,7 @@ impl App {
                         active.last_edit = Instant::now();
                         active.note.content = active.content.text();
                         rebuild_content_derived(active);
+                        refresh_note_search(active, None);
                     }
 
                     // 不再强制滚动编辑器自身：text_editor 自身会保证光标在视口内，
@@ -676,6 +813,7 @@ impl App {
                     active.note.content = prev;
                     active.content = text_editor::Content::with_text(&active.note.content);
                     rebuild_content_derived(active);
+                    refresh_note_search(active, None);
                     active.dirty = true;
                     active.last_edit = Instant::now();
                     sync_editor_to_cursor(active);
@@ -693,6 +831,7 @@ impl App {
                     active.note.content = next;
                     active.content = text_editor::Content::with_text(&active.note.content);
                     rebuild_content_derived(active);
+                    refresh_note_search(active, None);
                     active.dirty = true;
                     active.last_edit = Instant::now();
                     sync_editor_to_cursor(active);
@@ -926,6 +1065,7 @@ impl App {
                         )));
                     active.note.content = active.content.text();
                     rebuild_content_derived(active);
+                    refresh_note_search(active, None);
                     active.dirty = true;
                     active.last_edit = Instant::now();
                     sync_editor_to_cursor(active);
@@ -1152,6 +1292,59 @@ impl App {
                 Task::none()
             }
 
+            Message::NoteSearchQueryChanged(query) => {
+                if let Some(active) = &mut self.active_note {
+                    active.note_search_query = query;
+                    refresh_note_search(active, None);
+
+                    if let Some(index) = active.note_search_index {
+                        return select_note_search_match(active, index, false);
+                    }
+                }
+                Task::none()
+            }
+
+            Message::NoteSearchNext => {
+                if let Some(active) = &mut self.active_note {
+                    let total = active.note_search_matches.len();
+                    if total == 0 {
+                        return Task::none();
+                    }
+
+                    let next = active
+                        .note_search_index
+                        .map(|index| (index + 1) % total)
+                        .unwrap_or(0);
+
+                    return select_note_search_match(active, next, false);
+                }
+                Task::none()
+            }
+
+            Message::NoteSearchPrevious => {
+                if let Some(active) = &mut self.active_note {
+                    let total = active.note_search_matches.len();
+                    if total == 0 {
+                        return Task::none();
+                    }
+
+                    let previous = active
+                        .note_search_index
+                        .map(|index| (index + total - 1) % total)
+                        .unwrap_or(total - 1);
+
+                    return select_note_search_match(active, previous, false);
+                }
+                Task::none()
+            }
+
+            Message::ClearNoteSearch => {
+                if let Some(active) = &mut self.active_note {
+                    clear_note_search(active);
+                }
+                Task::none()
+            }
+
             // 导出
             Message::ExportNote => {
                 if let Some(active) = &self.active_note {
@@ -1240,6 +1433,7 @@ impl App {
                         )));
                     active.note.content = active.content.text();
                     rebuild_content_derived(active);
+                    refresh_note_search(active, None);
                     active.dirty = true;
                     active.last_edit = Instant::now();
                     sync_editor_to_cursor(active);
@@ -1264,6 +1458,12 @@ impl App {
                     key,
                     iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
                 ) {
+                    if let Some(active) = &mut self.active_note
+                        && !active.note_search_query.is_empty()
+                    {
+                        clear_note_search(active);
+                        return Task::none();
+                    }
                     if self.context_menu.is_some() {
                         self.context_menu = None;
                         self.context_menu_position = None;
@@ -1309,7 +1509,15 @@ impl App {
                             }
                         }
                         iced::keyboard::Key::Character("f") => {
-                            iced::widget::operation::focus(iced::widget::Id::new("search-input"))
+                            if modifiers.shift() || self.active_note.is_none() {
+                                iced::widget::operation::focus(iced::widget::Id::new(
+                                    "search-input",
+                                ))
+                            } else {
+                                iced::widget::operation::focus(
+                                    crate::ui::toolbar::note_search_input_id(),
+                                )
+                            }
                         }
                         iced::keyboard::Key::Character("e") => {
                             if modifiers.shift() {
@@ -1340,5 +1548,91 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{locate_note_search_matches, refresh_note_search};
+    use crate::app::ActiveNote;
+    use crate::model::note::Note;
+    use iced::widget::{markdown, text_editor};
+    use std::collections::HashMap;
+    use std::time::Instant;
+
+    fn make_active_note(content: &str, query: &str) -> ActiveNote {
+        ActiveNote {
+            note: Note {
+                id: "note-1".to_string(),
+                folder_id: "folder-1".to_string(),
+                title: "test".to_string(),
+                content: content.to_string(),
+                sort_order: 1,
+                created_at: String::new(),
+                updated_at: String::new(),
+            },
+            content: text_editor::Content::with_text(content),
+            markdown_items: markdown::parse(content).collect(),
+            images: HashMap::new(),
+            dirty: false,
+            last_edit: Instant::now(),
+            editor_content_height: 0.0,
+            editor_viewport_height: 0.0,
+            editor_target: None,
+            preview_content_height: 0.0,
+            preview_viewport_height: 0.0,
+            preview_target: None,
+            editing: true,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_undo_push: Instant::now(),
+            note_search_query: query.to_string(),
+            note_search_matches: Vec::new(),
+            note_search_index: None,
+        }
+    }
+
+    #[test]
+    fn locate_note_search_matches_is_case_insensitive_across_lines() {
+        let matches = locate_note_search_matches("Alpha\nbeta ALPHA\nGamma alpha", "alpha");
+
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].line, 0);
+        assert_eq!(matches[0].column, 0);
+        assert_eq!(matches[1].line, 1);
+        assert_eq!(matches[1].column, 5);
+        assert_eq!(matches[2].line, 2);
+        assert_eq!(matches[2].column, 6);
+    }
+
+    #[test]
+    fn locate_note_search_matches_tracks_cjk_columns() {
+        let matches = locate_note_search_matches("第一行\n第二行关键字\n第三行关键字", "关键字");
+
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].line, 1);
+        assert_eq!(matches[0].column, 3);
+        assert_eq!(matches[0].byte_column, 9);
+        assert_eq!(matches[0].byte_len, 9);
+        assert_eq!(matches[1].line, 2);
+        assert_eq!(matches[1].column, 3);
+        assert_eq!(matches[1].byte_column, 9);
+        assert_eq!(matches[1].byte_len, 9);
+        assert_eq!(matches[0].match_len, 3);
+    }
+
+    #[test]
+    fn refresh_note_search_preserves_current_match_when_still_present() {
+        let mut active = make_active_note("alpha beta alpha", "alpha");
+        refresh_note_search(&mut active, None);
+        active.note_search_index = Some(1);
+
+        active.note.content = "alpha beta alpha gamma".to_string();
+        active.content = text_editor::Content::with_text(&active.note.content);
+        refresh_note_search(&mut active, None);
+
+        assert_eq!(active.note_search_matches.len(), 2);
+        assert_eq!(active.note_search_index, Some(1));
+        assert_eq!(active.note_search_matches[1].column, 11);
     }
 }

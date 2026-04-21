@@ -24,6 +24,15 @@ pub struct PendingNoteJump {
     pub match_len: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoteSearchMatch {
+    pub line: usize,
+    pub column: usize,
+    pub match_len: usize,
+    pub byte_column: usize,
+    pub byte_len: usize,
+}
+
 /// 当前活跃笔记状态
 pub struct ActiveNote {
     pub note: Note,
@@ -42,10 +51,9 @@ pub struct ActiveNote {
     pub undo_stack: Vec<String>,
     pub redo_stack: Vec<String>,
     pub last_undo_push: Instant,
-    /// 搜索高亮查询词（查看模式下高亮文档中的匹配内容）
-    pub highlight_query: Option<String>,
-    /// 搜索导航目标行（查看模式滚动定位）
-    pub highlight_line: Option<usize>,
+    pub note_search_query: String,
+    pub note_search_matches: Vec<NoteSearchMatch>,
+    pub note_search_index: Option<usize>,
 }
 
 /// 重命名状态
@@ -202,6 +210,9 @@ impl App {
                 active.editing,
                 self.dark_theme,
                 self.editor_font_size,
+                &active.note_search_query,
+                active.note_search_index.map(|index| index + 1).unwrap_or(0),
+                active.note_search_matches.len(),
             );
             let editor = ui::editor::view(active, &self.theme(), self.editor_font_size);
 

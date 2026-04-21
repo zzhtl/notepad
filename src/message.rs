@@ -130,6 +130,10 @@ pub enum Message {
     SearchPerformed(String, Vec<SearchResult>),
     #[allow(dead_code)]
     ClearSearch,
+    NoteSearchQueryChanged(String),
+    NoteSearchNext,
+    NoteSearchPrevious,
+    ClearNoteSearch,
 
     // 导出
     ExportNote,
