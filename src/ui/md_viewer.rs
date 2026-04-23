@@ -10,6 +10,9 @@ pub struct NotepadViewer<'a> {
     pub images: &'a HashMap<String, image::Handle>,
 }
 
+const MARKDOWN_TEXT_WRAPPING: iced::widget::text::Wrapping =
+    iced::widget::text::Wrapping::WordOrGlyph;
+
 impl<'a> NotepadViewer<'a> {
     /// 从 URL 中提取图片 ID
     /// 兼容多种格式：notepad://image/{id}, notepad:image:{id}, attachment://{id}, img-{id}, 或纯 id
@@ -48,6 +51,57 @@ impl<'a> markdown::Viewer<'a, Message> for NotepadViewer<'a> {
         Message::MarkdownLinkClicked(url)
     }
 
+    fn heading(
+        &self,
+        settings: markdown::Settings,
+        level: &'a markdown::HeadingLevel,
+        text: &'a markdown::Text,
+        index: usize,
+    ) -> Element<'a, Message> {
+        let markdown::Settings {
+            h1_size,
+            h2_size,
+            h3_size,
+            h4_size,
+            h5_size,
+            h6_size,
+            text_size,
+            ..
+        } = settings;
+
+        container(
+            rich_text(text.spans(settings.style))
+                .on_link_click(Self::on_link_click)
+                .wrapping(MARKDOWN_TEXT_WRAPPING)
+                .size(match level {
+                    markdown::HeadingLevel::H1 => h1_size,
+                    markdown::HeadingLevel::H2 => h2_size,
+                    markdown::HeadingLevel::H3 => h3_size,
+                    markdown::HeadingLevel::H4 => h4_size,
+                    markdown::HeadingLevel::H5 => h5_size,
+                    markdown::HeadingLevel::H6 => h6_size,
+                }),
+        )
+        .padding(iced::padding::top(if index > 0 {
+            text_size / 2.0
+        } else {
+            iced::Pixels::ZERO
+        }))
+        .into()
+    }
+
+    fn paragraph(
+        &self,
+        settings: markdown::Settings,
+        text: &markdown::Text,
+    ) -> Element<'a, Message> {
+        rich_text(text.spans(settings.style))
+            .size(settings.text_size)
+            .wrapping(MARKDOWN_TEXT_WRAPPING)
+            .on_link_click(Self::on_link_click)
+            .into()
+    }
+
     fn image(
         &self,
         settings: markdown::Settings,
@@ -67,8 +121,12 @@ impl<'a> markdown::Viewer<'a, Message> for NotepadViewer<'a> {
             .into();
         }
         // 回退：显示 alt 文本
-        container(rich_text(alt.spans(settings.style)).on_link_click(Self::on_link_click))
-            .padding(settings.spacing.0)
-            .into()
+        container(
+            rich_text(alt.spans(settings.style))
+                .wrapping(MARKDOWN_TEXT_WRAPPING)
+                .on_link_click(Self::on_link_click),
+        )
+        .padding(settings.spacing.0)
+        .into()
     }
 }

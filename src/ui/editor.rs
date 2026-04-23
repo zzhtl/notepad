@@ -8,6 +8,8 @@ use crate::ui::search_highlight::{SearchHighlightSettings, SearchHighlighter, to
 
 const PREVIEW_MAX_WIDTH: f32 = 920.0;
 pub const EDITOR_LINE_HEIGHT_FACTOR: f32 = 1.3;
+const NOTE_TEXT_WRAPPING: iced::widget::text::Wrapping =
+    iced::widget::text::Wrapping::WordOrGlyph;
 
 /// 编辑器 ID（供 focus 操作使用）
 pub fn editor_id() -> iced::widget::Id {
@@ -40,6 +42,7 @@ fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Elem
         .on_action(Message::EditorAction)
         .size(font_size as f32)
         .line_height(EDITOR_LINE_HEIGHT_FACTOR)
+        .wrapping(NOTE_TEXT_WRAPPING)
         .padding(12)
         .height(iced::Length::Shrink)
         .highlight_with::<SearchHighlighter>(settings, to_format);
@@ -97,6 +100,7 @@ fn view_readonly<'a>(
         .on_action(Message::EditorAction)
         .size(font_size as f32)
         .line_height(EDITOR_LINE_HEIGHT_FACTOR)
+        .wrapping(NOTE_TEXT_WRAPPING)
         .padding([20, 32])
         .height(iced::Length::Shrink)
         .highlight_with::<SearchHighlighter>(settings, to_format);
