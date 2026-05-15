@@ -1,4 +1,4 @@
-use iced::widget::{container, markdown, row, rule, scrollable, text_editor};
+use iced::widget::{container, markdown, mouse_area, responsive, row, rule, scrollable, text_editor};
 use iced::{Element, Fill, Theme};
 
 use crate::app::ActiveNote;
@@ -8,6 +8,9 @@ use crate::ui::search_highlight::{SearchHighlightSettings, SearchHighlighter, to
 
 const PREVIEW_MAX_WIDTH: f32 = 920.0;
 pub const EDITOR_LINE_HEIGHT_FACTOR: f32 = 1.3;
+const EDITOR_PADDING: f32 = 12.0;
+const EDITOR_VERTICAL_PADDING: f32 = EDITOR_PADDING * 2.0;
+const READONLY_VERTICAL_PADDING: f32 = 40.0;
 const NOTE_TEXT_WRAPPING: iced::widget::text::Wrapping =
     iced::widget::text::Wrapping::WordOrGlyph;
 
@@ -30,6 +33,10 @@ fn note_scrollbar_direction() -> scrollable::Direction {
     )
 }
 
+fn editor_min_height(available_height: f32, vertical_padding: f32) -> f32 {
+    (available_height - vertical_padding).max(0.0)
+}
+
 /// 渲染编辑模式：左右分屏
 fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Element<'a, Message> {
     let settings = SearchHighlightSettings::from_matches(
@@ -37,20 +44,27 @@ fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Elem
         active.note_search_index,
     );
 
-    let editor = text_editor(&active.content)
-        .id(editor_id())
-        .on_action(Message::EditorAction)
-        .size(font_size as f32)
-        .line_height(EDITOR_LINE_HEIGHT_FACTOR)
-        .wrapping(NOTE_TEXT_WRAPPING)
-        .padding(12)
-        .height(iced::Length::Shrink)
-        .highlight_with::<SearchHighlighter>(settings, to_format);
-    let editor = scrollable(editor)
-        .id(editor_scrollable_id())
-        .on_scroll(Message::EditorScrolled)
-        .direction(note_scrollbar_direction())
-        .height(Fill);
+    let editor = responsive(move |size| {
+        let editor = text_editor(&active.content)
+            .id(editor_id())
+            .on_action(Message::EditorAction)
+            .size(font_size as f32)
+            .line_height(EDITOR_LINE_HEIGHT_FACTOR)
+            .wrapping(NOTE_TEXT_WRAPPING)
+            .padding(EDITOR_PADDING)
+            .min_height(editor_min_height(size.height, EDITOR_VERTICAL_PADDING))
+            .height(iced::Length::Shrink)
+            .highlight_with::<SearchHighlighter>(settings.clone(), to_format);
+
+        scrollable(editor)
+            .id(editor_scrollable_id())
+            .on_scroll(Message::EditorScrolled)
+            .direction(note_scrollbar_direction())
+            .height(Fill)
+            .into()
+    })
+    .height(Fill);
+    let editor = mouse_area(editor).on_right_press(Message::ShowEditorContextMenu);
 
     let md_settings = markdown::Settings::from(theme);
     let viewer = NotepadViewer {
@@ -95,20 +109,27 @@ fn view_readonly<'a>(
         active.note_search_index,
     );
 
-    let editor = text_editor(&active.content)
-        .id(editor_id())
-        .on_action(Message::EditorAction)
-        .size(font_size as f32)
-        .line_height(EDITOR_LINE_HEIGHT_FACTOR)
-        .wrapping(NOTE_TEXT_WRAPPING)
-        .padding([20, 32])
-        .height(iced::Length::Shrink)
-        .highlight_with::<SearchHighlighter>(settings, to_format);
-    let editor = scrollable(editor)
-        .id(editor_scrollable_id())
-        .on_scroll(Message::EditorScrolled)
-        .direction(note_scrollbar_direction())
-        .height(Fill);
+    let editor = responsive(move |size| {
+        let editor = text_editor(&active.content)
+            .id(editor_id())
+            .on_action(Message::EditorAction)
+            .size(font_size as f32)
+            .line_height(EDITOR_LINE_HEIGHT_FACTOR)
+            .wrapping(NOTE_TEXT_WRAPPING)
+            .padding([20, 32])
+            .min_height(editor_min_height(size.height, READONLY_VERTICAL_PADDING))
+            .height(iced::Length::Shrink)
+            .highlight_with::<SearchHighlighter>(settings.clone(), to_format);
+
+        scrollable(editor)
+            .id(editor_scrollable_id())
+            .on_scroll(Message::EditorScrolled)
+            .direction(note_scrollbar_direction())
+            .height(Fill)
+            .into()
+    })
+    .height(Fill);
+    let editor = mouse_area(editor).on_right_press(Message::ShowEditorContextMenu);
 
     container(editor).width(Fill).height(Fill).into()
 }

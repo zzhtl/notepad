@@ -33,6 +33,8 @@ pub enum MdShortcut {
 /// 全局消息枚举
 #[derive(Debug, Clone)]
 pub enum Message {
+    NoOp,
+
     // 树形视图
     TreeLoaded(Vec<TreeNode>),
     ToggleFolder(String),
@@ -63,6 +65,10 @@ pub enum Message {
 
     // 编辑器
     EditorAction(iced::widget::text_editor::Action),
+    ShowEditorContextMenu,
+    CopyEditorSelection,
+    PasteIntoEditor,
+    EditorPasteReceived(Option<String>),
     #[allow(dead_code)]
     MarkdownParsed(Vec<iced::widget::markdown::Item>),
     SaveTick,
@@ -95,6 +101,7 @@ pub enum Message {
 
     // 键盘快捷键
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
+    ModifiersChanged(iced::keyboard::Modifiers),
 
     // 上下文菜单
     ShowContextMenu(ContextMenuTarget),

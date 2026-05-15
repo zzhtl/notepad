@@ -91,6 +91,9 @@ pub struct App {
     pub(crate) selected_id: Option<String>,
     pub(crate) active_note: Option<ActiveNote>,
     pub(crate) context_menu: Option<ContextMenuTarget>,
+    pub(crate) editor_context_menu: bool,
+    pub(crate) editor_context_selection: Option<String>,
+    pub(crate) editor_context_cursor: Option<text_editor::Cursor>,
     pub(crate) rename_state: Option<RenameState>,
     pub(crate) error: Option<String>,
     pub(crate) search_query: String,
@@ -108,6 +111,7 @@ pub struct App {
     pub(crate) cursor_position: Point,
     /// 右键菜单打开时锁定的位置快照（None 表示未打开）
     pub(crate) context_menu_position: Option<Point>,
+    pub(crate) current_modifiers: iced::keyboard::Modifiers,
 }
 
 fn build_move_folder_options(folders: Vec<Folder>) -> Vec<MoveFolderOption> {
@@ -160,6 +164,9 @@ impl App {
             selected_id: None,
             active_note: None,
             context_menu: None,
+            editor_context_menu: false,
+            editor_context_selection: None,
+            editor_context_cursor: None,
             rename_state: None,
             error: None,
             search_query: String::new(),
@@ -175,6 +182,7 @@ impl App {
             move_note_state: None,
             cursor_position: Point::ORIGIN,
             context_menu_position: None,
+            current_modifiers: iced::keyboard::Modifiers::default(),
         };
 
         let task = Task::perform(
@@ -433,6 +441,101 @@ impl App {
                 .width(Fill)
                 .height(Fill)
                 .into()
+        } else if self.editor_context_menu {
+            let menu_style = |theme: &Theme| -> container::Style {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(palette.background.weak.color.into()),
+                    border: Border {
+                        radius: 8.0.into(),
+                        width: 1.0,
+                        color: Color {
+                            a: 0.35,
+                            ..palette.primary.base.color
+                        },
+                    },
+                    ..container::Style::default()
+                }
+            };
+            let muted_text = |theme: &Theme| -> text::Style {
+                let palette = theme.extended_palette();
+                text::Style {
+                    color: Some(palette.background.weak.text),
+                }
+            };
+            let enabled_text = |theme: &Theme| -> text::Style {
+                let palette = theme.extended_palette();
+                text::Style {
+                    color: Some(palette.primary.base.color),
+                }
+            };
+            let can_copy = self
+                .editor_context_selection
+                .is_some()
+                || self
+                .active_note
+                .as_ref()
+                .and_then(|active| active.content.selection())
+                .is_some();
+            let can_paste = self
+                .active_note
+                .as_ref()
+                .is_some_and(|active| active.editing);
+            let mut menu_items: Vec<Element<'_, Message>> = Vec::new();
+
+            if can_copy {
+                menu_items.push(
+                    button(text("复制").size(13).style(enabled_text))
+                        .on_press(Message::CopyEditorSelection)
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                );
+            } else {
+                menu_items.push(
+                    container(text("复制").size(13).style(muted_text))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .into(),
+                );
+            }
+
+            if can_paste {
+                menu_items.push(
+                    button(text("粘贴").size(13).style(enabled_text))
+                        .on_press(Message::PasteIntoEditor)
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .style(button::text)
+                        .into(),
+                );
+            } else {
+                menu_items.push(
+                    container(text("粘贴").size(13).style(muted_text))
+                        .padding([4, 12])
+                        .width(Length::Fill)
+                        .into(),
+                );
+            }
+
+            let menu = container(column(menu_items).spacing(1).width(Length::Fixed(120.0)))
+                .padding(6)
+                .style(menu_style);
+            let dismiss = mouse_area(Space::new().width(Fill).height(Fill))
+                .on_press(Message::HideContextMenu);
+            let pos = self.context_menu_position.unwrap_or(self.cursor_position);
+            let menu_pad = Padding {
+                top: pos.y.max(0.0),
+                left: pos.x.max(0.0),
+                right: 0.0,
+                bottom: 0.0,
+            };
+
+            stack![main_view, dismiss, container(menu).padding(menu_pad)]
+                .width(Fill)
+                .height(Fill)
+                .into()
         } else {
             main_view
         }
@@ -449,10 +552,10 @@ impl App {
             iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
                 Message::KeyPressed(key, modifiers)
             }
-            _ => Message::KeyPressed(
-                iced::keyboard::Key::Unidentified,
-                iced::keyboard::Modifiers::default(),
-            ),
+            iced::keyboard::Event::ModifiersChanged(modifiers) => {
+                Message::ModifiersChanged(modifiers)
+            }
+            _ => Message::NoOp,
         });
 
         Subscription::batch([auto_save, keyboard])

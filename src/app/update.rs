@@ -450,6 +450,8 @@ impl App {
 impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::NoOp => Task::none(),
+
             Message::TreeLoaded(tree) => {
                 self.tree = tree;
                 Task::none()
@@ -695,6 +697,24 @@ impl App {
                         return scroll_editor_by_lines(self.editor_font_size, *lines);
                     }
 
+                    if let text_editor::Action::Click(position) = action
+                        && self.current_modifiers.shift()
+                    {
+                        let cursor = active.content.cursor();
+                        let anchor = cursor.selection.unwrap_or(cursor.position);
+                        active.content.move_to(text_editor::Cursor {
+                            position: anchor,
+                            selection: None,
+                        });
+                        active.content.perform(text_editor::Action::Drag(position));
+
+                        if active.editing {
+                            sync_preview_to_cursor(active);
+                            return sync_preview_task(active);
+                        }
+                        return Task::none();
+                    }
+
                     let is_edit = action.is_edit();
 
                     // 查看模式：只允许光标移动和选中，禁止编辑
@@ -736,6 +756,110 @@ impl App {
                     return Task::none();
                 }
                 Task::none()
+            }
+
+            Message::ShowEditorContextMenu => {
+                self.clear_note_drag_state();
+                self.context_menu = None;
+                self.move_note_state = None;
+                self.context_menu_position = Some(self.cursor_position);
+                let context_selection = self.active_note.as_ref().and_then(|active| {
+                    active
+                        .content
+                        .selection()
+                        .map(|selection| (selection, active.content.cursor()))
+                });
+                self.editor_context_selection =
+                    context_selection.as_ref().map(|(selection, _)| selection.clone());
+                self.editor_context_cursor = context_selection.map(|(_, cursor)| cursor);
+                self.editor_context_menu = true;
+                iced::widget::operation::focus(crate::ui::editor::editor_id())
+            }
+
+            Message::CopyEditorSelection => {
+                self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
+                self.editor_context_menu = false;
+
+                if let Some(selection) =
+                    self.editor_context_selection.take().or_else(|| {
+                        self.active_note
+                            .as_ref()
+                            .and_then(|active| active.content.selection())
+                    })
+                {
+                    if let Some(cursor) = self.editor_context_cursor.take()
+                        && let Some(active) = &mut self.active_note
+                    {
+                        active.content.move_to(cursor);
+                    }
+
+                    Task::batch([
+                        iced::clipboard::write(selection),
+                        iced::widget::operation::focus(crate::ui::editor::editor_id()),
+                    ])
+                } else {
+                    self.editor_context_cursor = None;
+                    Task::none()
+                }
+            }
+
+            Message::PasteIntoEditor => {
+                self.context_menu = None;
+                self.context_menu_position = None;
+                self.move_note_state = None;
+                self.editor_context_menu = false;
+                self.editor_context_selection = None;
+                self.editor_context_cursor = None;
+
+                iced::clipboard::read().map(Message::EditorPasteReceived)
+            }
+
+            Message::EditorPasteReceived(contents) => {
+                let Some(contents) = contents else {
+                    return Task::none();
+                };
+                if contents.is_empty() {
+                    return Task::none();
+                }
+
+                if let Some(active) = &mut self.active_note {
+                    if !active.editing {
+                        return Task::none();
+                    }
+
+                    active.undo_stack.push(active.note.content.clone());
+                    if active.undo_stack.len() > 100 {
+                        active.undo_stack.remove(0);
+                    }
+                    active.redo_stack.clear();
+                    active.last_undo_push = Instant::now();
+                    active
+                        .content
+                        .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                            Arc::new(contents),
+                        )));
+                    active.note.content = active.content.text();
+                    rebuild_content_derived(active);
+                    refresh_note_search(active, None);
+                    active.dirty = true;
+                    active.last_edit = Instant::now();
+                    sync_editor_to_cursor(active);
+                    sync_preview_to_cursor(active);
+                }
+
+                let sync_task = self
+                    .active_note
+                    .as_ref()
+                    .map(|active| {
+                        Task::batch([sync_editor_task(active), sync_preview_task(active)])
+                    })
+                    .unwrap_or_else(Task::none);
+                Task::batch([
+                    sync_task,
+                    iced::widget::operation::focus(crate::ui::editor::editor_id()),
+                ])
             }
 
             Message::EditorScrolled(viewport) => {
@@ -1091,6 +1215,9 @@ impl App {
                 self.clear_note_drag_state();
                 self.context_menu_position = Some(self.cursor_position);
                 self.context_menu = Some(target);
+                self.editor_context_menu = false;
+                self.editor_context_selection = None;
+                self.editor_context_cursor = None;
                 self.move_note_state = None;
                 Task::none()
             }
@@ -1099,6 +1226,9 @@ impl App {
                 self.context_menu = None;
                 self.context_menu_position = None;
                 self.move_note_state = None;
+                self.editor_context_menu = false;
+                self.editor_context_selection = None;
+                self.editor_context_cursor = None;
                 Task::none()
             }
 
@@ -1453,6 +1583,7 @@ impl App {
             }
 
             Message::KeyPressed(key, modifiers) => {
+                self.current_modifiers = modifiers;
                 // Esc：关闭弹出层（菜单 / 重命名 / 待创建 / 错误）
                 if matches!(
                     key,
@@ -1464,10 +1595,13 @@ impl App {
                         clear_note_search(active);
                         return Task::none();
                     }
-                    if self.context_menu.is_some() {
+                    if self.context_menu.is_some() || self.editor_context_menu {
                         self.context_menu = None;
                         self.context_menu_position = None;
                         self.move_note_state = None;
+                        self.editor_context_menu = false;
+                        self.editor_context_selection = None;
+                        self.editor_context_cursor = None;
                         self.clear_note_drag_state();
                         return Task::none();
                     }
@@ -1546,6 +1680,11 @@ impl App {
                 } else {
                     Task::none()
                 }
+            }
+
+            Message::ModifiersChanged(modifiers) => {
+                self.current_modifiers = modifiers;
+                Task::none()
             }
         }
     }
