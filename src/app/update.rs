@@ -515,6 +515,11 @@ impl App {
                 self.move_note_to_folder(note_id, folder_id)
             }
 
+            Message::ClearSelection => {
+                self.selected_id = None;
+                Task::none()
+            }
+
             Message::SelectNote(id) => {
                 // 双击检测
                 let is_double_click =

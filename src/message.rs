@@ -40,6 +40,7 @@ pub enum Message {
     ToggleFolder(String),
     FolderChildrenLoaded(String, Vec<TreeNode>),
     SelectNote(String),
+    ClearSelection,
     OpenSearchResult(SearchResult),
 
     // 文件夹操作

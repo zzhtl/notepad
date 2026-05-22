@@ -116,7 +116,7 @@ fn view_readonly<'a>(
             .size(font_size as f32)
             .line_height(EDITOR_LINE_HEIGHT_FACTOR)
             .wrapping(NOTE_TEXT_WRAPPING)
-            .padding([20, 32])
+            .padding([20, 16])
             .min_height(editor_min_height(size.height, READONLY_VERTICAL_PADDING))
             .height(iced::Length::Shrink)
             .highlight_with::<SearchHighlighter>(settings.clone(), to_format);

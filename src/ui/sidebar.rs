@@ -1,4 +1,6 @@
-use iced::widget::{Space, button, column, container, row, rule, scrollable, text, text_input};
+use iced::widget::{
+    Space, button, column, container, mouse_area, row, rule, scrollable, text, text_input,
+};
 use iced::{Border, Element, Fill, Length, Theme};
 
 use crate::app::{PendingCreate, update::pending_input_id};
@@ -236,6 +238,14 @@ pub fn view<'a>(
         column(tree_col).spacing(1).into()
     };
 
+    // 包一层让空白区域填满 scrollable 视口，方便点击空白处取消选中
+    let body_filled = container(body)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    let scrollable_area = mouse_area(scrollable(body_filled).height(Fill))
+        .on_press(Message::ClearSelection);
+
     container(
         column![
             header,
@@ -243,7 +253,7 @@ pub fn view<'a>(
             search,
             create_buttons,
             rule::horizontal(1),
-            scrollable(body).height(Fill),
+            scrollable_area,
         ]
         .spacing(0),
     )
