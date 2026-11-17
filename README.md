@@ -8,14 +8,18 @@
 
 [下载最新 Release](https://github.com/zzhtl/notepad/releases/latest) · [GitHub CI](https://github.com/zzhtl/notepad/actions/workflows/release.yml)
 
-发布包由 GitHub Actions 构建并验证安装、启动和重新安装后的数据保留。
+当前版本：[Notepad v0.2.2](https://github.com/zzhtl/notepad/releases/tag/v0.2.2)
+
+发布包由 GitHub Actions 构建并验证安装、启动和重新安装后的数据保留。安装或升级前，请先关闭正在运行的 Notepad。
 
 | 平台 | 安装包 | 安装方式 |
 |------|--------|----------|
-| Ubuntu 22.04+ / Debian 12+ x86_64 | `.deb` | 双击用软件安装器安装，或在下载目录执行 `sudo apt install ./notepad-*-linux-x86_64.deb` |
-| Windows 10+ x86_64 | `-setup.exe` | 双击按安装向导操作，安装到当前用户目录；从开始菜单启动 |
-| macOS 11+ Apple Silicon | `-macos-arm64.pkg` | 双击按安装向导操作，安装后从“应用程序 → Notepad”启动 |
-| macOS 11+ Intel | `-macos-x86_64.pkg` | 双击按安装向导操作，安装后从“应用程序 → Notepad”启动 |
+| Ubuntu 22.04+ / Debian 12+ x86_64 | [notepad-v0.2.2-linux-x86_64.deb](https://github.com/zzhtl/notepad/releases/download/v0.2.2/notepad-v0.2.2-linux-x86_64.deb) | 双击用软件安装器安装，或在下载目录执行 `sudo apt install ./notepad-v0.2.2-linux-x86_64.deb` |
+| Windows 10+ x86_64 | [notepad-v0.2.2-windows-x86_64-setup.exe](https://github.com/zzhtl/notepad/releases/download/v0.2.2/notepad-v0.2.2-windows-x86_64-setup.exe) | 双击按安装向导操作，安装到当前用户目录；从开始菜单启动 |
+| macOS 11+ Apple Silicon | [notepad-v0.2.2-macos-arm64.pkg](https://github.com/zzhtl/notepad/releases/download/v0.2.2/notepad-v0.2.2-macos-arm64.pkg) | 双击按安装向导操作，安装后从“应用程序 → Notepad”启动 |
+| macOS 11+ Intel | [notepad-v0.2.2-macos-x86_64.pkg](https://github.com/zzhtl/notepad/releases/download/v0.2.2/notepad-v0.2.2-macos-x86_64.pkg) | 双击按安装向导操作，安装后从“应用程序 → Notepad”启动 |
+
+[SHA256 校验文件](https://github.com/zzhtl/notepad/releases/download/v0.2.2/SHA256SUMS.txt)
 
 Windows 和 macOS 安装包目前没有开发者证书签名及公证，首次安装可能出现系统来源验证提示。安装包和 SHA256 校验文件均从本仓库 Release 下载。
 
