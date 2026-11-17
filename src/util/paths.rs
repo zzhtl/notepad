@@ -15,7 +15,13 @@ fn resolve_at(executable: &Path, data_directory: Option<&Path>) -> io::Result<Ap
     let directory = executable
         .parent()
         .ok_or_else(|| io::Error::other("无法获取程序目录"))?;
-    let installed = directory.join("notepad.install").try_exists()?;
+    // macOS 的 MacOS 目录只放代码，安装标识作为资源参与应用签名。
+    let marker_directory = if directory.ends_with(Path::new("Contents").join("MacOS")) {
+        directory.with_file_name("Resources")
+    } else {
+        directory.to_path_buf()
+    };
+    let installed = marker_directory.join("notepad.install").try_exists()?;
     let database = if installed {
         let directory = data_directory
             .ok_or_else(|| io::Error::other("无法获取用户数据目录"))?
@@ -78,6 +84,20 @@ mod tests {
         assert!(!install.join("notepad.db").exists());
         let again = resolve_at(&install.join("notepad"), Some(&data)).unwrap();
         assert_eq!(again.database, paths.database);
+    }
+
+    #[test]
+    fn macos_bundle_reads_installed_marker_from_resources() {
+        let root = TestDirectory::new();
+        let contents = root.0.join("Notepad.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::create_dir_all(contents.join("Resources")).unwrap();
+        std::fs::write(contents.join("Resources/notepad.install"), b"").unwrap();
+        let data = root.0.join("user-data");
+        let paths = resolve_at(&contents.join("MacOS/notepad"), Some(&data)).unwrap();
+        assert!(paths.installed);
+        assert_eq!(paths.database, data.join("notepad/notepad.db"));
+        assert!(!contents.join("MacOS/notepad.install").exists());
     }
 
     #[test]

@@ -48,7 +48,7 @@ def linux(binary, stage, output, version):
         "Maintainer: zzhtl <zclgudu1224@126.com>\n"
         "Section: editors\nPriority: optional\n"
         f"Installed-Size: {size}\n"
-        "Depends: libc6 (>= 2.35), libgcc-s1, libxkbcommon0, libwayland-client0, "
+        "Depends: libc6 (>= 2.35), libgcc-s1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, "
         "libx11-6, libxcb1, libxcb-render0, libxcb-shape0, libxcb-xfixes0, "
         "libegl1, libgl1, xdg-desktop-portal, "
         "xdg-desktop-portal-gtk | xdg-desktop-portal-kde\n"
@@ -88,9 +88,9 @@ def macos(binary, stage, output, version, target):
     executable = app / "Contents/MacOS/notepad"
     copy(binary, executable)
     executable.chmod(0o755)
-    mark_installed(executable.parent)
     resources = app / "Contents/Resources"
     resources.mkdir(parents=True)
+    mark_installed(resources)
     for document in ("LICENSE", "README.md"):
         copy(ROOT / document, resources / document)
     iconset = stage / "notepad.iconset"

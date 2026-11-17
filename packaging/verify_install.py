@@ -25,6 +25,9 @@ def launch(binary, database, environment, phase):
             for _ in range(40):
                 time.sleep(0.2)
                 if app.poll() is not None:
+                    details = (WORK / f"{phase}.log").read_text(errors="replace")[-4000:]
+                    escaped = details.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                    print(f"::error title=Application startup failure::{escaped}", flush=True)
                     raise RuntimeError(f"Application exited during {phase}; see target/install-check/{phase}.log")
             assert database.is_file(), f"Database missing at {database}"
             assert not (binary.parent / "notepad.db").exists(), "Database must not be inside installation"
@@ -69,7 +72,8 @@ def main():
         uninstall = ["sudo", "apt-get", "remove", "-y", "notepad"]
     assert not database.exists(), "Use a fresh CI runner; do not overwrite existing user data"
     run(*install)
-    assert (binary.parent / "notepad.install").is_file()
+    marker_directory = binary.parent.parent / "Resources" if sys.platform == "darwin" else binary.parent
+    assert (marker_directory / "notepad.install").is_file()
     expected = (ROOT / "target/package" / f"{args.target}.sha256").read_text().strip()
     assert hashlib.sha256(binary.read_bytes()).hexdigest() == expected
     if sys.platform == "darwin":
