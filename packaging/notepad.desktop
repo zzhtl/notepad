@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Notepad
+Comment=Markdown notes with folders and local storage
+Exec=/usr/lib/notepad/notepad
+Icon=notepad
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=Markdown;Notes;
+StartupWMClass=notepad

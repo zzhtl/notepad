@@ -8,20 +8,30 @@
 
 [下载最新 Release](https://github.com/zzhtl/notepad/releases/latest) · [GitHub CI](https://github.com/zzhtl/notepad/actions/workflows/release.yml)
 
-当前版本：[Notepad v0.2.0](https://github.com/zzhtl/notepad/releases/tag/v0.2.0)
+发布包由 GitHub Actions 构建并验证安装、启动和重新安装后的数据保留。
 
-| 平台 | 下载 |
-|------|------|
-| Linux x86_64 | [notepad-v0.2.0-linux-x86_64.tar.gz](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-linux-x86_64.tar.gz) |
-| Windows x86_64 | [notepad-v0.2.0-windows-x86_64.zip](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-windows-x86_64.zip) |
-| macOS Apple Silicon | [notepad-v0.2.0-macos-arm64.tar.gz](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-macos-arm64.tar.gz) |
-| macOS Intel | [notepad-v0.2.0-macos-x86_64.tar.gz](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-macos-x86_64.tar.gz) |
+| 平台 | 安装包 | 安装方式 |
+|------|--------|----------|
+| Ubuntu 22.04+ / Debian 12+ x86_64 | `.deb` | 双击用软件安装器安装，或在下载目录执行 `sudo apt install ./notepad-*-linux-x86_64.deb` |
+| Windows 10+ x86_64 | `-setup.exe` | 双击按安装向导操作，安装到当前用户目录；从开始菜单启动 |
+| macOS 11+ Apple Silicon | `-macos-arm64.pkg` | 双击按安装向导操作，安装后从“应用程序 → Notepad”启动 |
+| macOS 11+ Intel | `-macos-x86_64.pkg` | 双击按安装向导操作，安装后从“应用程序 → Notepad”启动 |
 
-[SHA256 校验文件](https://github.com/zzhtl/notepad/releases/download/v0.2.0/SHA256SUMS.txt)
+Windows 和 macOS 安装包目前没有开发者证书签名及公证，首次安装可能出现系统来源验证提示。安装包和 SHA256 校验文件均从本仓库 Release 下载。
 
-发布包由 GitHub Actions 构建，提供 Linux x86_64、Windows x86_64、macOS Apple Silicon 和 Intel 版本。解压到可写目录后运行 `notepad`（Windows 为 `notepad.exe`）。Linux 需要桌面环境、`libxkbcommon0` 及可用的文件选择器 portal（例如 `xdg-desktop-portal-gtk`）。macOS 包为未签名的命令行可执行文件。
+### 数据与升级
 
-数据存储在程序同目录的 `notepad.db`；升级时关闭程序、保留数据库文件，只替换可执行文件。
+安装版将数据库放在用户数据目录，重新安装和升级保留笔记，卸载程序不删除笔记数据：
+
+| 平台 | 数据库默认位置 |
+|------|----------------|
+| Linux | `~/.local/share/notepad/notepad.db`（设置了 `XDG_DATA_HOME` 时使用该目录） |
+| Windows | `%LOCALAPPDATA%\notepad\notepad.db` |
+| macOS | `~/Library/Application Support/notepad/notepad.db` |
+
+从 v0.2.0 免安装版迁移：先在旧版点击 **全部导出**，再安装新版并点击 **全部导入**，选择导出的整个目录。旧版的 `notepad.db` 保留在原程序目录，不会被安装器自动移动或删除。
+
+自行 `cargo build` 的便携版继续使用程序同目录的数据库。
 
 ## 功能特性
 
@@ -125,7 +135,7 @@ cargo build --release
 cargo run --release
 ```
 
-数据库文件 `notepad.db` 会自动创建在可执行文件所在目录。
+自行构建的便携版会在可执行文件所在目录创建 `notepad.db`；安装版的数据目录见上文。
 
 ## 项目结构
 
@@ -186,7 +196,7 @@ cargo test
 
 ## 发布
 
-推送 `main` 后执行测试和 Clippy 检查；推送与 `Cargo.toml` 版本一致的 `v*` 标签后，GitHub Actions 在四个平台分别构建及测试 Release，全部成功后上传压缩包和 `SHA256SUMS.txt` 并创建 GitHub Release。README 单独更新不重复触发构建。
+推送 `main` 后执行测试和 Clippy 检查；推送与 `Cargo.toml` 版本一致的 `v*` 标签后，GitHub Actions 在四个平台分别构建及测试 Release，随后生成 `.deb`、Windows 安装向导 `.exe` 和 macOS `.pkg`，验证实际安装、启动、重新安装与数据保留。全部成功后上传安装包和 `SHA256SUMS.txt` 并创建 GitHub Release。README 单独更新不重复触发构建。
 
 ## 许可证
 
