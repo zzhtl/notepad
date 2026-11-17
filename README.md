@@ -8,6 +8,17 @@
 
 [下载最新 Release](https://github.com/zzhtl/notepad/releases/latest) · [GitHub CI](https://github.com/zzhtl/notepad/actions/workflows/release.yml)
 
+当前版本：[Notepad v0.2.0](https://github.com/zzhtl/notepad/releases/tag/v0.2.0)
+
+| 平台 | 下载 |
+|------|------|
+| Linux x86_64 | [notepad-v0.2.0-linux-x86_64.tar.gz](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-linux-x86_64.tar.gz) |
+| Windows x86_64 | [notepad-v0.2.0-windows-x86_64.zip](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-windows-x86_64.zip) |
+| macOS Apple Silicon | [notepad-v0.2.0-macos-arm64.tar.gz](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-macos-arm64.tar.gz) |
+| macOS Intel | [notepad-v0.2.0-macos-x86_64.tar.gz](https://github.com/zzhtl/notepad/releases/download/v0.2.0/notepad-v0.2.0-macos-x86_64.tar.gz) |
+
+[SHA256 校验文件](https://github.com/zzhtl/notepad/releases/download/v0.2.0/SHA256SUMS.txt)
+
 发布包由 GitHub Actions 构建，提供 Linux x86_64、Windows x86_64、macOS Apple Silicon 和 Intel 版本。解压到可写目录后运行 `notepad`（Windows 为 `notepad.exe`）。Linux 需要桌面环境、`libxkbcommon0` 及可用的文件选择器 portal（例如 `xdg-desktop-portal-gtk`）。macOS 包为未签名的命令行可执行文件。
 
 数据存储在程序同目录的 `notepad.db`；升级时关闭程序、保留数据库文件，只替换可执行文件。
