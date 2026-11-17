@@ -1,4 +1,4 @@
-use iced::widget::{Container, column, container, text};
+use iced::widget::{Container, button, column, container, row, text};
 use iced::{Border, Color, Fill, Theme};
 
 use crate::message::Message;
@@ -40,11 +40,18 @@ pub fn view<'a>(_dark: bool) -> Container<'a, Message> {
     let card = container(
         column![
             text("\u{1F4DD} Notepad").size(36),
-            text("高性能 Markdown 记事本").size(14).style(hint_style),
+            text("专注记录，让想法井井有条。").size(14).style(hint_style),
             text("").size(8),
+            row![
+                button("新建文件夹").on_press(Message::StartCreateFolder).padding([10, 16]),
+                button("新建笔记").on_press(Message::StartCreateNote)
+                    .padding([10, 16]).style(button::secondary),
+            ].spacing(10),
+            button("导入已有 Markdown 目录").on_press(Message::ImportAll)
+                .padding([8, 16]).style(button::text),
             text("快捷键").size(13),
             text("Ctrl + N    新建笔记").size(12).style(hint_style),
-            text("Ctrl + F    搜索笔记").size(12).style(hint_style),
+            text("Ctrl + Shift + F    搜索全部笔记").size(12).style(hint_style),
             text("Ctrl + S    保存当前笔记").size(12).style(hint_style),
             text("Ctrl + E    切换查看 / 编辑")
                 .size(12)

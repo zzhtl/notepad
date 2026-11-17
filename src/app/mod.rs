@@ -1,4 +1,5 @@
 mod tree_ops;
+pub mod transfer;
 pub mod update;
 
 use std::collections::HashMap;
@@ -96,6 +97,8 @@ pub struct App {
     pub(crate) editor_context_cursor: Option<text_editor::Cursor>,
     pub(crate) rename_state: Option<RenameState>,
     pub(crate) error: Option<String>,
+    pub(crate) notice: Option<String>,
+    pub(crate) transfer_busy: Option<&'static str>,
     pub(crate) search_query: String,
     pub(crate) search_results: Vec<crate::model::note::SearchResult>,
     pub(crate) search_active: bool,
@@ -169,6 +172,8 @@ impl App {
             editor_context_cursor: None,
             rename_state: None,
             error: None,
+            notice: None,
+            transfer_busy: None,
             search_query: String::new(),
             search_results: Vec::new(),
             search_active: false,
@@ -216,7 +221,6 @@ impl App {
                 &active.note.title,
                 active.dirty,
                 active.editing,
-                self.dark_theme,
                 self.editor_font_size,
                 &active.note_search_query,
                 active.note_search_index.map(|index| index + 1).unwrap_or(0),
@@ -246,6 +250,13 @@ impl App {
             content = content.push(ui::error_banner::view(err));
         }
 
+        if let Some(notice) = &self.notice {
+            content = content.push(container(row![
+                text(notice).size(12).width(Fill),
+                button("关闭").on_press(Message::DismissNotice).style(button::text),
+            ].spacing(12).align_y(iced::Center)).padding([8, 14]).style(container::rounded_box));
+        }
+
         content = content.push(row![sidebar, rule::vertical(1), editor_area].height(Fill));
 
         // 用 mouse_area 包裹主视图以持续跟踪鼠标位置，供右键菜单弹出定位使用。
@@ -255,6 +266,20 @@ impl App {
                 .on_move(Message::CursorMoved)
                 .on_release(Message::FinishNoteDrag)
                 .into();
+
+        if let Some(label) = self.transfer_busy {
+            let overlay = container(column![
+                text(label).size(18),
+                text("完成后会显示结果，请稍候。").size(13),
+            ].spacing(12)).padding(28).style(container::rounded_box);
+            return stack![
+                main_view,
+                mouse_area(container(overlay).center(Fill).style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.5).into()),
+                    ..container::Style::default()
+                })).on_press(Message::NoOp),
+            ].into();
+        }
 
         // 上下文菜单覆盖层
         if let Some(ctx) = &self.context_menu {
@@ -645,11 +670,13 @@ impl App {
             let note = active.note.clone();
             Task::perform(
                 async move {
-                    db.execute(move |conn| crate::db::note::save_note(conn, &note))
-                        .await
+                    db.execute(move |conn| {
+                        crate::db::note::save_note(conn, &note)?;
+                        Ok::<_, rusqlite::Error>(note)
+                    }).await
                 },
                 |result| match result {
-                    Ok(()) => Message::NoteSaved,
+                    Ok(note) => Message::NoteSaved(note),
                     Err(e) => Message::DbError(e.to_string()),
                 },
             )

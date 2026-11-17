@@ -38,6 +38,7 @@ fn main() -> iced::Result {
     .window({
         let mut settings = iced::window::Settings {
             size: iced::Size::new(1200.0, 800.0),
+            min_size: Some(iced::Size::new(800.0, 600.0)),
             ..Default::default()
         };
         #[cfg(target_os = "linux")]

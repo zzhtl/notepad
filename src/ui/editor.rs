@@ -90,9 +90,15 @@ fn view_split<'a>(active: &'a ActiveNote, theme: &Theme, font_size: u16) -> Elem
     .height(Fill);
 
     row![
-        container(editor).width(Fill).height(Fill),
+        iced::widget::column![
+            container(iced::widget::text("MARKDOWN  /  编辑").size(11)).padding([8, 16]),
+            container(editor).width(Fill).height(Fill),
+        ].width(Fill).height(Fill),
         rule::vertical(1),
-        container(preview).width(Fill).height(Fill),
+        iced::widget::column![
+            container(iced::widget::text("PREVIEW  /  实时预览").size(11)).padding([8, 16]),
+            container(preview).width(Fill).height(Fill),
+        ].width(Fill).height(Fill),
     ]
     .height(Fill)
     .into()

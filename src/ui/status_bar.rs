@@ -1,5 +1,5 @@
-use iced::widget::{Space, container, row, text};
-use iced::{Element, Fill, Theme};
+use iced::widget::{container, row, text};
+use iced::{Element, Theme};
 
 use crate::app::ActiveNote;
 use crate::message::Message;
@@ -54,7 +54,6 @@ pub fn view(active: &ActiveNote) -> Element<'_, Message> {
             ))
             .size(11)
             .style(dim),
-            Space::new().width(Fill),
             text(format!("{char_count} 字符")).size(11).style(dim),
             text("·").size(11).style(dim),
             text(format!("{word_count} 词")).size(11).style(dim),
@@ -67,7 +66,7 @@ pub fn view(active: &ActiveNote) -> Element<'_, Message> {
         ]
         .spacing(8)
         .padding([5, 14])
-        .align_y(iced::Center),
+        .align_y(iced::Center).wrap(),
     )
     .style(status_bar_style)
     .into()

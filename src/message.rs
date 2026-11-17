@@ -49,11 +49,12 @@ pub enum Message {
 
     // 笔记操作
     NoteCreated(TreeNode),
+    FirstNoteCreated(Vec<TreeNode>, Note),
     NoteLoaded(Note),
     NoteLoadedEditing(Note),
     NoteMoved(NoteMeta),
     SaveNote,
-    NoteSaved,
+    NoteSaved(Note),
 
     // 内联创建
     StartCreateFolder,
@@ -145,6 +146,10 @@ pub enum Message {
 
     // 导出
     ExportNote,
+    ExportAll,
+    ImportAll,
+    TransferFinished(Result<Option<crate::app::transfer::TransferOutcome>, String>),
+    DismissNotice,
     ExportCompleted(Result<(), String>),
 
     // 主题

@@ -443,12 +443,22 @@ impl App {
             return Task::batch([load_images_task, focus_readonly_editor(), editor_task]);
         }
 
-        load_images_task
+        if editing {
+            Task::batch([
+                load_images_task,
+                iced::widget::operation::focus(crate::ui::editor::editor_id()),
+            ])
+        } else {
+            load_images_task
+        }
     }
 }
 
 impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if self.transfer_busy.is_some() && !matches!(message, Message::TransferFinished(_)) {
+            return Task::none();
+        }
         match message {
             Message::NoOp => Task::none(),
 
@@ -982,8 +992,12 @@ impl App {
 
             Message::SaveNote => self.save_current_note(),
 
-            Message::NoteSaved => {
-                if let Some(active) = &mut self.active_note {
+            Message::NoteSaved(saved) => {
+                if let Some(active) = &mut self.active_note
+                    && active.note.id == saved.id
+                    && active.note.title == saved.title
+                    && active.note.content == saved.content
+                {
                     active.dirty = false;
                 }
                 Task::none()
@@ -991,6 +1005,8 @@ impl App {
 
             // 内联创建
             Message::StartCreateFolder => {
+                self.search_active = false;
+                self.search_query.clear();
                 self.pending_create = Some(PendingCreate {
                     parent_id: None,
                     is_folder: true,
@@ -1000,8 +1016,11 @@ impl App {
             }
 
             Message::StartCreateNote => {
+                self.search_active = false;
+                self.search_query.clear();
                 let folder_id = self.find_selected_folder_id();
                 if let Some(fid) = folder_id {
+                    tree_ops::ensure_expanded(&mut self.tree, &fid);
                     self.pending_create = Some(PendingCreate {
                         parent_id: Some(fid),
                         is_folder: false,
@@ -1009,7 +1028,12 @@ impl App {
                     });
                     iced::widget::operation::focus(pending_input_id())
                 } else {
-                    Task::none()
+                    self.pending_create = Some(PendingCreate {
+                        parent_id: None,
+                        is_folder: false,
+                        input: String::new(),
+                    });
+                    iced::widget::operation::focus(pending_input_id())
                 }
             }
 
@@ -1092,8 +1116,21 @@ impl App {
                             },
                         )
                     } else {
-                        let folder_id = state.parent_id.unwrap_or_default();
-                        self.create_note_in_folder_with_name(folder_id, name)
+                        if let Some(folder_id) = state.parent_id {
+                            self.create_note_in_folder_with_name(folder_id, name)
+                        } else {
+                            let db = self.db.clone();
+                            Task::perform(async move {
+                                db.execute(move |conn| {
+                                    let folder = crate::db::folder::create_folder(conn, None, "我的笔记")?;
+                                    let note = crate::db::note::create_note(conn, &folder.id, &name)?;
+                                    Ok::<_, rusqlite::Error>((crate::db::folder::load_root_tree(conn)?, note))
+                                }).await
+                            }, |result| match result {
+                                Ok((tree, note)) => Message::FirstNoteCreated(tree, note),
+                                Err(e) => Message::DbError(e.to_string()),
+                            })
+                        }
                     }
                 } else {
                     Task::none()
@@ -1115,13 +1152,22 @@ impl App {
                 Task::none()
             }
 
+            Message::FirstNoteCreated(tree, note) => {
+                self.tree = tree;
+                tree_ops::ensure_expanded(&mut self.tree, &note.folder_id);
+                self.selected_id = Some(note.id.clone());
+                self.open_note(note, true)
+            }
+
             Message::NoteCreated(node) => {
                 let folder_id = match &node {
                     TreeNode::Note { meta } => meta.folder_id.clone(),
                     _ => return Task::none(),
                 };
+                let note_id = node.id().to_string();
                 tree_ops::add_node(&mut self.tree, &folder_id, node);
-                Task::none()
+                tree_ops::ensure_expanded(&mut self.tree, &folder_id);
+                self.update(Message::EditNote(note_id))
             }
 
             Message::NoteMoved(meta) => {
@@ -1480,6 +1526,45 @@ impl App {
                 Task::none()
             }
 
+            Message::ExportAll => self.start_transfer(false),
+            Message::ImportAll => self.start_transfer(true),
+            Message::DismissNotice => {
+                self.notice = None;
+                Task::none()
+            }
+            Message::TransferFinished(result) => {
+                self.transfer_busy = None;
+                match result {
+                    Ok(Some(outcome)) => {
+                        let report = outcome.report;
+                        if let Some(tree) = outcome.tree {
+                            self.tree = tree;
+                            self.search_active = false;
+                            self.search_query.clear();
+                            self.search_results.clear();
+                            self.pending_create = None;
+                            self.rename_state = None;
+                            self.notice = Some(format!(
+                                "导入完成：新增 {} 篇，更新 {} 篇，跳过 {} 篇，新增 {} 个文件夹，忽略 {} 个非 Markdown 文件或链接。",
+                                report.created, report.updated, report.skipped, report.folders, report.ignored));
+                            if let Some(note) = outcome.active_note {
+                                let editing = self.active_note.as_ref().is_some_and(|active| active.editing);
+                                self.selected_id = Some(note.id.clone());
+                                return self.open_note(note, editing);
+                            }
+                            self.selected_id = None;
+                        } else {
+                            if let Some(active) = &mut self.active_note { active.dirty = false; }
+                            self.notice = Some(format!("已导出 {} 篇笔记、{} 个文件夹到 {}",
+                                report.created, report.folders, report.path.display()));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => self.error = Some(error),
+                }
+                Task::none()
+            }
+
             // 导出
             Message::ExportNote => {
                 if let Some(active) = &self.active_note {
@@ -1634,19 +1719,7 @@ impl App {
                 if modifiers.command() {
                     match key.as_ref() {
                         iced::keyboard::Key::Character("s") => self.save_current_note(),
-                        iced::keyboard::Key::Character("n") => {
-                            let folder_id = self.find_selected_folder_id();
-                            if let Some(fid) = folder_id {
-                                self.pending_create = Some(PendingCreate {
-                                    parent_id: Some(fid),
-                                    is_folder: false,
-                                    input: String::new(),
-                                });
-                                iced::widget::operation::focus(pending_input_id())
-                            } else {
-                                Task::none()
-                            }
-                        }
+                        iced::keyboard::Key::Character("n") => self.update(Message::StartCreateNote),
                         iced::keyboard::Key::Character("f") => {
                             if modifiers.shift() || self.active_note.is_none() {
                                 iced::widget::operation::focus(iced::widget::Id::new(
@@ -1734,6 +1807,26 @@ mod tests {
             note_search_matches: Vec::new(),
             note_search_index: None,
         }
+    }
+
+    #[test]
+    fn stale_save_acknowledgements_do_not_clear_new_edits() {
+        let db = crate::db::DbPool::open(std::path::Path::new(":memory:")).expect("database");
+        let (mut app, _) = crate::app::App::new(db);
+        let mut active = make_active_note("new content", "");
+        active.dirty = true;
+        let current = active.note.clone();
+        app.active_note = Some(active);
+        let mut old = current.clone();
+        old.content = "old content".into();
+        let _ = app.update(crate::message::Message::NoteSaved(old));
+        assert!(app.active_note.as_ref().unwrap().dirty);
+        let mut another = current.clone();
+        another.id = "another-note".into();
+        let _ = app.update(crate::message::Message::NoteSaved(another));
+        assert!(app.active_note.as_ref().unwrap().dirty);
+        let _ = app.update(crate::message::Message::NoteSaved(current));
+        assert!(!app.active_note.as_ref().unwrap().dirty);
     }
 
     #[test]

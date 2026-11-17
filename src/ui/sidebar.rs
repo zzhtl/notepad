@@ -93,11 +93,15 @@ pub fn view<'a>(
 
     // 搜索框
     let search = container(
-        text_input("\u{1F50D} 搜索笔记...", search_query)
+        row![text_input("搜索全部笔记", search_query)
             .id(iced::widget::Id::new("search-input"))
             .on_input(Message::SearchQueryChanged)
             .size(13)
             .padding([7, 10]),
+            button(text("清除").size(11))
+                .on_press_maybe((!search_query.is_empty()).then_some(Message::ClearSearch))
+                .padding([7, 6]).style(button::text),
+        ].spacing(4).align_y(iced::Center),
     )
     .padding([8, 8]);
 
@@ -191,7 +195,7 @@ pub fn view<'a>(
         if tree_items.is_empty() && pending_create.is_none() {
             tree_col.push(
                 container(
-                    text("暂无文件夹，点击上方按钮创建")
+                    text("先创建文件夹，开始整理你的笔记。")
                         .size(12)
                         .style(search_result_snippet),
                 )
@@ -253,11 +257,29 @@ pub fn view<'a>(
             search,
             create_buttons,
             rule::horizontal(1),
+            container(text(if search_active { "搜索结果" } else { "我的笔记" }).size(11))
+                .padding([10, 12]),
             scrollable_area,
+            rule::horizontal(1),
+            container(column![
+                row![
+                    button(text("全部导入").size(12)).on_press(Message::ImportAll)
+                        .padding([8, 12]).width(Fill).style(button::secondary),
+                    button(text("全部导出").size(12)).on_press(Message::ExportAll)
+                        .padding([8, 12]).width(Fill).style(button::secondary),
+                ].spacing(8),
+                text("导入目录 · 同名更新 · 相同内容跳过").size(10),
+            ].spacing(6)).padding([10, 10]),
+            container(row![
+                text("本地存储 · 自动保存").size(11),
+                Space::new().width(Fill),
+                button(text("切换主题").size(11))
+                    .on_press(Message::ToggleTheme).style(button::text),
+            ].align_y(iced::Center)).padding([8, 10]),
         ]
         .spacing(0),
     )
-    .width(Length::Fixed(250.0))
+    .width(Length::Fixed(260.0))
     .height(Fill)
     .style(sidebar_style)
     .into()
