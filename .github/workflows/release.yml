@@ -1,0 +1,141 @@
+name: CI and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['README.md']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  check:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - name: Test
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            archive: linux-x86_64
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            archive: windows-x86_64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            archive: macos-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config
+      - name: Install Rust
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$BUILD_TARGET"
+      - name: Verify version tag
+        shell: python
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          import os, pathlib, re
+          version = re.search(r'^version = "([^"]+)"', pathlib.Path('Cargo.toml').read_text(), re.M)[1]
+          assert os.environ['RELEASE_TAG'] == 'v' + version, 'Tag must match Cargo.toml version'
+      - name: Build and test release
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target "$BUILD_TARGET"
+          cargo test --release --locked --target "$BUILD_TARGET"
+      - name: Package binary
+        shell: python
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          ARCHIVE_PLATFORM: ${{ matrix.archive }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          import os, pathlib, shutil, tarfile, zipfile
+          name = f"notepad-{os.environ['RELEASE_TAG']}-{os.environ['ARCHIVE_PLATFORM']}"
+          package = pathlib.Path('dist') / name
+          package.mkdir(parents=True)
+          binary = 'notepad.exe' if os.name == 'nt' else 'notepad'
+          shutil.copy2(pathlib.Path('target') / os.environ['BUILD_TARGET'] / 'release' / binary, package / binary)
+          for document in ('README.md', 'LICENSE'):
+              shutil.copy2(document, package / document)
+          if os.name == 'nt':
+              with zipfile.ZipFile(f'dist/{name}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+                  for file in package.iterdir():
+                      archive.write(file, f'{name}/{file.name}')
+          else:
+              with tarfile.open(f'dist/{name}.tar.gz', 'w:gz') as archive:
+                  archive.add(package, arcname=name)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: notepad-${{ matrix.archive }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: notepad-*
+          merge-multiple: true
+          path: dist
+      - name: Verify packages and compute checksums
+        working-directory: dist
+        run: |
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --verify-tag \
+            --title "Notepad $RELEASE_TAG" --generate-notes
