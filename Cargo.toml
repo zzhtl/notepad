@@ -1,6 +1,6 @@
 [package]
 name = "notepad"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "高性能 Markdown 记事本"
 
@@ -16,6 +16,8 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6.0.0"
+pulldown-cmark = "0.12.2"
+percent-encoding = "2.3"
 
 [profile.release]
 opt-level = 3

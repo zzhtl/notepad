@@ -2475,12 +2475,14 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notepad"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
  "iced",
  "iced_core",
+ "percent-encoding",
+ "pulldown-cmark",
  "rfd",
  "rusqlite",
  "rusqlite_migration",
